@@ -38,8 +38,8 @@ a receipt at the end.
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/scttfrdmn/aws-agencore-demo ~/src/aws-agencore-demo
-cd ~/src/aws-agencore-demo
+git clone https://github.com/scttfrdmn/aws-agentcore-demo ~/src/aws-agentcore-demo
+cd ~/src/aws-agentcore-demo
 uv venv && uv pip install -e ".[dev]"
 ```
 
