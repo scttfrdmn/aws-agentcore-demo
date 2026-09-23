@@ -11,7 +11,13 @@ jobs:
         with:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v5
-      - run: uv pip install -e ".[dev]" --system
+      # uv sync installs from uv.lock, so CI runs the SAME ruff/pytest versions
+      # as a contributor's machine.  The previous `uv pip install -e ".[dev]"`
+      # re-resolved on every run: on 2026-09-22 that gave CI a newer ruff than
+      # the lockfile's 0.15.14, which formats Python blocks inside Markdown while
+      # the local one does not -- so `make lint` passed locally and CI failed on
+      # README.md.  Lock-driven CI makes "clean locally" mean "clean in CI".
+      - run: uv sync --extra dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest

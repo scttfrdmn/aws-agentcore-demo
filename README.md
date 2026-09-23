@@ -66,9 +66,9 @@ cp config.example.py config.py
 Open `config.py` and fill in your account ID and S3 bucket name:
 
 ```python
-REGION     = "us-west-2"
-ACCOUNT_ID = "123456789012"       # your 12-digit account ID
-BUCKET     = "my-corpus-bucket"  # an S3 bucket you own
+REGION = "us-west-2"
+ACCOUNT_ID = "123456789012"  # your 12-digit account ID
+BUCKET = "my-corpus-bucket"  # an S3 bucket you own
 
 # IMPORTANT: Use US inference profile IDs (start with "us.")
 MODELS = {

@@ -4,15 +4,15 @@ install:    ## install the package + dev tools
 	uv pip install -e ".[dev]"
 
 lint:       ## ruff check + format check
-	uv run ruff check .
-	uv run ruff format --check .
+	uv run --extra dev ruff check .
+	uv run --extra dev ruff format --check .
 
 fix:        ## auto-fix lint + format
-	uv run ruff check --fix .
-	uv run ruff format .
+	uv run --extra dev ruff check --fix .
+	uv run --extra dev ruff format .
 
-test:       ## run the test suite
-	uv run pytest
+test:       ## run the test suite (no AWS calls; works without `make install`)
+	uv run --extra dev pytest
 
 corpus:     ## fetch the PMC paper corpus (one-time)
 	uv run python corpus_fetch.py

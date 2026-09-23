@@ -200,11 +200,11 @@ never actually been exercised are now exercised. Findings worth keeping:
 
 - Python 3.11, `src/` layout, package is `agentcore_demo`.
 - **Always `uv`, never bare `pip`**: `uv pip install -e ".[dev]"`, `uv run ...`.
-- **`make install` first, once.** After that `make lint` and `make test` work
-  (88 tests). In a fresh checkout `make test` on its own fails at collection with
-  `ModuleNotFoundError: No module named 'agentcore_demo'`, because `uv run pytest`
-  doesn't install the package or the dev extra. If you'd rather not install,
-  `uv run --extra dev pytest` works standalone.
+- **`make lint` / `make test` work from a cold checkout** (88 tests) — no
+  `make install` needed. They pass `--extra dev` explicitly. This used to fail
+  with `ModuleNotFoundError: No module named 'agentcore_demo'` because bare
+  `uv run pytest` installs neither the package nor the dev extra; fixed
+  2026-09-22. `make install` is still there if you want the editable install.
 - **Lint/format: `ruff`** must be clean. **Tests: `pytest`** must pass. CI runs both
   on every push (it does the editable install explicitly, so CI is unaffected).
 - **No AWS calls in tests.** `agent.py` takes an AWS backend by dependency
