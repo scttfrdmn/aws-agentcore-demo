@@ -29,11 +29,37 @@ Verified AWS Price List quirks (do not "fix" without re-checking):
     zero items -- it is too new to have pricing data populated.
     S3 Vectors storage and query rates must come from config.py fallbacks.
     This may change as the service matures; try the live fetch periodically.
+    STILL UNRESOLVED as of 2026-09-22: worth one manual get_products call
+    against BOTH "AmazonS3Vectors" and "AmazonS3" -- S3 Vectors rates are
+    published on the S3 pricing page, so the offer may live under AmazonS3.
 
-  Claude 4.x pricing location (2026-05-20):
-    Claude 4.x model prices (Haiku 4.5, Sonnet 4.6, Opus 4.7) are NOT in
+  S3 Vectors rate corrections (2026-09-22):
+    The fallbacks below were wrong, one of them badly.  Re-read from
+    https://aws.amazon.com/s3/pricing/ (us-east-1 figures in the worked
+    examples; the rate table itself does not render):
+      - storage  $0.05 -> $0.06 per GB-month
+      - query    $0.40 -> $0.0025 per 1,000 queries
+    The query rate was off by ~160x.  The real fee is $2.50 per MILLION
+    QueryVectors requests; the old value read as $0.40 per THOUSAND, which
+    made every retrieval look ~160x more expensive than it is.  This is why
+    the receipt showed a suspiciously round $0.000400 per retrieval.
+
+    Query cost is actually three terms, not one:
+      1. request fee        $2.50 / 1M QueryVectors  <- what we meter
+      2. data processed     tiered by index size: $0.004/TB up to 100K
+                            vectors, $0.002/TB to 10M, $0.0004/TB beyond
+                            (the 10M+ tier was cut ~80% on 2026-06-16)
+      3. data returned      $0.01/GB, first 512KB per query free,
+                            each result billed at a 256-byte floor
+    We deliberately meter only term 1.  For this demo's ~5.5K-vector index,
+    term 2 is ~$1e-7 per query and term 3 falls entirely inside the free
+    allowance -- so the request fee dominates and the other two would add
+    noise digits without changing the number the audience sees.
+
+  Claude 4.x/5 pricing location (2026-05-20, re-checked 2026-09-22):
+    Current Claude model prices (Haiku 4.5, Sonnet 5, Opus 5) are NOT in
     the "AmazonBedrock" Price List service code.  That service only covers
-    Claude 2.x and 3.x.  Claude 4.x pricing is in the separate
+    Claude 2.x and 3.x.  Everything from Claude 4.x onward is in the separate
     "AmazonBedrockFoundationModels" service code.
     The PRICING dict in config.py is sourced from that service.
     See: https://aws.amazon.com/bedrock/pricing/
@@ -78,10 +104,10 @@ import logging
 log = logging.getLogger(__name__)
 
 # Hard-coded floor values used only if BOTH the Price List API and config.py
-# are unavailable.  These are roughly correct as of 2026-05 but will drift.
+# are unavailable.  Re-verified against the AWS S3 pricing page on 2026-09-22.
 _HARD_DEFAULTS: dict[str, float] = {
-    "s3v_storage_usd_per_gb_month": 0.05,  # S3 Vectors storage, per GB/month
-    "s3v_query_usd_per_1k": 0.40,  # KB retrieval, per 1,000 queries
+    "s3v_storage_usd_per_gb_month": 0.06,  # S3 Vectors storage, per GB/month
+    "s3v_query_usd_per_1k": 0.0025,  # KB retrieval, per 1,000 queries ($2.50/M)
     "embed_usd_per_1m_tokens": 0.02,  # Titan Embed V2, per 1M input tokens
     "s3_standard_usd_per_gb_month": 0.023,  # S3 standard storage, first 50 TB, us-west-2
 }
@@ -257,7 +283,7 @@ def _fetch_s3_standard_rate(region: str) -> dict[str, float] | None:
             for term in item.get("terms", {}).get("OnDemand", {}).values():
                 for dim in term.get("priceDimensions", {}).values():
                     desc = dim.get("description", "")
-                    # "first 50 TB" is the cheapest tier; a 10 MB corpus easily fits.
+                    # "first 50 TB" is the cheapest tier; a 48 MB corpus easily fits.
                     if "first 50 TB" not in desc:
                         continue
                     usd = float(dim.get("pricePerUnit", {}).get("USD", "0") or "0")
@@ -274,8 +300,10 @@ def _fetch_s3_standard_rate(region: str) -> dict[str, float] | None:
 def _from_config() -> dict[str, float]:
     """Load fallback rates from config.py, filling gaps with _HARD_DEFAULTS.
 
-    The config.py values are sourced from the AWS pricing page and are
-    accurate as of 2026-05.  The hard defaults are a last resort for when
+    The config.py values are sourced from the AWS pricing page and were
+    re-verified on 2026-09-22 (the S3 Vectors query rate was wrong by ~160x
+    before that -- see the module docstring).  The hard defaults are a last
+    resort for when
     config.py is missing entirely (e.g. when running tests without config.py).
     """
     try:

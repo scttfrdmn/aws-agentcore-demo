@@ -133,7 +133,7 @@ def test_ws_streams_complete_run_ending_in_done(fake_env):
     types = [e["type"] for e in events]
     assert types[-1] == "done"
     assert "receipt" in types
-    assert types.count("question") == 3
+    assert types.count("question") == 4  # four beats since 2026-09-22
 
 
 def test_ws_receipt_total_matches_row_sum(fake_env):
@@ -175,7 +175,9 @@ def test_ws_question_precedes_its_model_events(fake_env):
     if current:
         blocks.append(current)
 
-    assert len(blocks) == 3
+    # Four beats, not three: the run default became (1, 2, 3, 4) on 2026-09-22
+    # when we found beat 4 (the Cedar policy demo) was excluded by default.
+    assert len(blocks) == 4
     for block in blocks:
         assert block[0]["type"] == "question"
         model_indices = [i for i, e in enumerate(block) if e["type"] == "model"]

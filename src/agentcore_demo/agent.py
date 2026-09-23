@@ -72,7 +72,11 @@ Emit = Callable[[dict], None]
 #                  vector_count, ...}
 #   guardrail     {actions}                  URL matches intercepted; each action has
 #                                            {original, local, reason}
-#   policy_denied {tool, reason}             Cedar Gateway policy denied a tool call
+#   policy_denied {tool, reason}             Cedar Gateway policy denied a tool call.
+#                                            Emitted ONLY for a recognised Cedar
+#                                            denial -- a gateway that simply failed
+#                                            reports itself through `phase` instead,
+#                                            so the badge never overstates the case.
 #   receipt       {rows, total}              the final itemised receipt
 #   done          {}                         run complete; browser shows receipt
 
@@ -266,7 +270,7 @@ class Agent:
         """Beat 1: Haiku answers a background question with citations.
 
         Demo story: "With Bedrock, a researcher can ask a plain question and
-        get a cited answer from 650 papers -- no setup, no data leaving AWS."
+        get a cited answer from 1,000 papers -- no setup, no data leaving AWS."
 
         Model choice: Haiku 4.5 -- cheapest capable model.  The point of
         beat 1 is to show that even a fast, cheap model gives useful output
@@ -360,13 +364,26 @@ class Agent:
           - Claude Sonnet 5: the adjudicator.  Sonnet is fast and accurate
             enough to compare two reviews; Opus would be overkill here.
 
-        Both reviewers get max_tokens=8192 deliberately.  Giving one model a
-        smaller budget than the other would rig the comparison -- the shorter
-        review would look less thorough for a reason that has nothing to do
-        with the model.  (The previous Amazon Nova Pro reviewer was capped at
-        4096 because that was Nova's limit; Astra allows 128K, so the two can
-        now be held to the same budget.)  max_tokens is a ceiling, not a spend:
-        cost follows the tokens actually produced.
+        Both reviewers get the SAME max_tokens and the same thinking setting,
+        deliberately.  Giving one model a smaller budget than the other would rig
+        the comparison -- the shorter review would look less thorough for a
+        reason that has nothing to do with the model.
+
+        Both are also run with thinking DISABLED, and the budget is 4096 rather
+        than 8192.  Measured against real AWS on 2026-09-22, the original
+        settings cost the demo dearly:
+            Opus 5, thinking on, max_tokens=8192 -> 108.2s, output hit 8192
+              exactly (i.e. the review was truncated), Q3 total 141.2s
+            Opus 5, thinking off, max_tokens=3000 ->  27.5s, output 1,631
+        Astra produced a complete 1,566-token review, so even 3000 is ample; the
+        shipped 4096 is that plus headroom, and 8192 was simply letting Opus run
+        until it was cut off.  With these settings plus the "max 400 words"
+        instruction in REVIEW_SYSTEM, Q3 came in at 48s against 141s before.
+        Adaptive thinking is
+        on by default on Claude 5 models and its output is NEVER displayed
+        (thinking.display defaults to omitted), so leaving it on spent ~80
+        seconds of a 300-second demo, plus output-token charges, on text no
+        audience member would ever see.
 
         Threading: both reviewers call backend.converse() in parallel via
         ThreadPoolExecutor.  Since both calls emit events, we protect emit()
@@ -394,7 +411,9 @@ class Agent:
             """Run one model review and emit start/done events thread-safely."""
             safe_emit({"type": "model", "tier": tier, "label": label, "state": "start"})
             t0 = time.monotonic()
-            txt, usage, _ = self.backend.converse(tier, Q.REVIEW_SYSTEM, prompt, max_tok)
+            txt, usage, _ = self.backend.converse(
+                tier, Q.REVIEW_SYSTEM, prompt, max_tok, thinking="disabled"
+            )
             elapsed = round(time.monotonic() - t0, 1)
             cost = self.meter.add_llm(step, tier, label, usage)
             safe_emit(
@@ -418,9 +437,9 @@ class Agent:
         # it finishes, so the adjudication waits for whichever is slower.
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
-                pool.submit(run_review, "Q3  reading", "opus", "Claude Opus", 8192): "opus",
+                pool.submit(run_review, "Q3  reading", "opus", "Claude Opus", 4096): "opus",
                 pool.submit(
-                    run_review, "Q3  reading", "openai", "OpenAI GPT-6 Astra", 8192
+                    run_review, "Q3  reading", "openai", "OpenAI GPT-6 Astra", 4096
                 ): "openai",
             }
             for fut in as_completed(futures):
@@ -444,6 +463,19 @@ class Agent:
 
     # -- Q4: Cedar Gateway demo -- web_fetch blocked, fallback to KB -----
 
+    # Arguments for the web_fetch tool.  These are the query parameters of the
+    # ClinicalTrials.gov v2 /studies operation as declared in the "web-tools"
+    # OpenAPI target (build_kb.web_tools_openapi_schema()) -- NOT a free-form URL.
+    # The Gateway validates arguments against that schema, so this dict and the
+    # schema have to agree.  Dotted names are the registry's real wire names.
+    _Q4_WEB_FETCH_ARGS = {
+        "query.term": "PCSK9",
+        "filter.overallStatus": "RECRUITING,NOT_YET_RECRUITING",
+        "pageSize": 5,
+        "format": "json",
+        "countTotal": True,
+    }
+
     def question_4(self) -> None:
         """Beat 4: Cedar policy denies web_fetch; agent falls back to the knowledge base.
 
@@ -451,11 +483,31 @@ class Agent:
         can block specific tool calls.  The agent detects the denial and
         falls back gracefully to the knowledge base."
 
-        The Cedar policy attached to the gateway has a ForbidWeb rule that
-        denies any call where context.toolName == "web_fetch".  When the
-        denial is returned, the agent emits a policy_denied event (which
+        The tool is real.  "web-tools" is an OpenAPI gateway target over the
+        public ClinicalTrials.gov v2 API, so if you removed the Cedar policy this
+        call would genuinely fetch trials.  That matters for the claim being made
+        on stage: the policy is what stops it, not the absence of a tool.
+
+        The Cedar policy attached to the gateway has a ForbidWeb rule whose
+        action is the fully prefixed MCP tool name:
+            forbid(principal, action == AgentCore::Action::"web-tools___web_fetch",
+                   resource == AgentCore::Gateway::"<arn>");
+        The prefix matters.  An earlier version matched on
+        `context.toolName == "web_fetch"` and never fired at all (verified
+        against real AWS 2026-09-22) -- which was invisible while no real gateway
+        target existed, and became a silent SUCCESS on stage as soon as one did.
+        When the denial is returned, the agent emits a policy_denied event (which
         triggers the "Cedar Policy Denied" badge in the UI) and then
         re-runs the question against the knowledge base instead.
+
+        Three outcomes, because conflating them is how this beat breaks quietly:
+          denied  -> emit policy_denied (the badge) and answer from the KB.
+          result  -> the policy is not in force; answer WITH the trial data.
+          error   -> the gateway call failed for a reason that is not a policy
+                     decision (target missing, bad URL, network).  We must NOT
+                     show the badge: it would credit Cedar for an outage.  We
+                     say so in the phase line and still answer from the KB, so
+                     the run survives but nobody is misled.
 
         Note: Cedar policy denials arrive as HTTP 200 with a JSON-RPC error
         body, not as HTTP 403.  query_gateway() in aws.py handles this.
@@ -464,16 +516,8 @@ class Agent:
         self.emit({"type": "phase", "label": "querying AgentCore Gateway for clinical trial data"})
 
         # Attempt the web_fetch tool call through the Gateway.
-        # With the ForbidWeb Cedar policy, this will be denied.
-        result = self.backend.query_gateway(
-            "web_fetch",
-            {
-                "url": (
-                    "https://clinicaltrials.gov/api/query/full_studies"
-                    "?expr=PCSK9&min_rnk=1&max_rnk=5&fmt=json"
-                )
-            },
-        )
+        # With the ForbidWeb Cedar policy in ENFORCE mode, this will be denied.
+        result = self.backend.query_gateway("web_fetch", dict(self._Q4_WEB_FETCH_ARGS))
 
         if result.get("denied"):
             # Cedar policy blocked the request -- show the denial badge.
@@ -484,22 +528,27 @@ class Agent:
                     "label": "web access denied by Cedar policy — answering from knowledge base",
                 }
             )
-            # Fall back to the KB for a knowledge-based answer.
-            chunks = self._retrieve("Q4  retrieval", Q.QUESTIONS[3], n=12)
-            self.emit({"type": "retrieval", "count": len(chunks)})
-            text = self._model(
-                "Q4  synthesis",
-                "haiku",
-                "Claude Haiku",
-                Q.Q4_GATEWAY_SYSTEM,
-                (
-                    f"Note: web_fetch was denied by policy.\n\n"
-                    f"Passages:\n{self._context(chunks)}\n\n"
-                    f"Question: {Q.QUESTIONS[3]}"
-                ),
+            text = self._q4_from_kb("web_fetch was denied by policy.")
+        elif result.get("error"):
+            # Not a policy decision.  Report it in the open -- a missing or FAILED
+            # "web-tools" target lands here, and that is precisely the condition
+            # that used to masquerade as a success.  Reusing the `phase` event
+            # keeps the page unchanged; a fabricated badge would not be honest.
+            reason = result.get("reason", "unknown gateway error")
+            self.emit(
+                {
+                    "type": "phase",
+                    "label": (
+                        f"gateway call failed (NOT a policy denial): {reason} "
+                        "— answering from knowledge base"
+                    ),
+                }
             )
+            text = self._q4_from_kb(f"web_fetch could not be called: {reason}")
         else:
-            # web_fetch succeeded (unexpected with ENFORCE policy, but handled gracefully).
+            # web_fetch succeeded -- the policy is not in ENFORCE mode (or was
+            # removed).  Use the live trial data; the beat's security point is
+            # simply not being made on this run.
             self.emit({"type": "phase", "label": "processing clinical trial data"})
             trial_data = str(result.get("result", ""))[:2000]  # cap to avoid huge prompts
             chunks = self._retrieve("Q4  retrieval", Q.QUESTIONS[3], n=8)
@@ -516,6 +565,29 @@ class Agent:
             )
 
         self.emit({"type": "answer", "title": "Clinical trials  ·  Claude Haiku", "text": text})
+
+    def _q4_from_kb(self, note: str) -> str:
+        """Answer Q4 from the knowledge base alone, telling the model why.
+
+        Shared by both no-web-data paths (policy denial and gateway error) so the
+        fallback answer is identical apart from the one-line explanation, and so
+        neither path can drift from the other.
+
+        Args:
+            note: a short reason, shown to the model, for why there is no web data.
+
+        Returns:
+            The synthesised answer text.
+        """
+        chunks = self._retrieve("Q4  retrieval", Q.QUESTIONS[3], n=12)
+        self.emit({"type": "retrieval", "count": len(chunks)})
+        return self._model(
+            "Q4  synthesis",
+            "haiku",
+            "Claude Haiku",
+            Q.Q4_GATEWAY_SYSTEM,
+            (f"Note: {note}\n\nPassages:\n{self._context(chunks)}\n\nQuestion: {Q.QUESTIONS[3]}"),
+        )
 
     # -- free-form: route then dispatch ----------------------------------
 
@@ -547,7 +619,7 @@ class Agent:
 
     # -- run (canned questions) -----------------------------------------
 
-    def run(self, which: Sequence[int] = (1, 2, 3)) -> None:
+    def run(self, which: Sequence[int] = (1, 2, 3, 4)) -> None:
         """Run one or more canned questions and emit the final receipt.
 
         The setup_cost event is emitted first so the browser can populate
@@ -555,7 +627,10 @@ class Agent:
 
         Args:
             which: a sequence of question numbers (1-4) to run.
-                   Default is (1, 2, 3) -- the three main demo beats.
+                   Default is (1, 2, 3, 4) -- all four demo beats.  Q4 used to be
+                   excluded by default, which meant the Cedar beat never ran
+                   unless it was asked for by name; "Run complete" belongs after
+                   Q4, not after Q3.
         """
         # Emit the KB panel costs as the very first event so the sidebar
         # shows measured numbers while the questions are running.

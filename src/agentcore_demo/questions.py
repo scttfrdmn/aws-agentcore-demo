@@ -1,7 +1,7 @@
 """
 questions.py  --  the locked question texts and their system prompts.
 
-The three (now four) demo questions are rehearsed for the live talk.
+All four demo questions are rehearsed for the live talk.
 DO NOT reword them.  The exact phrasing has been tested for timing,
 audience clarity, and model response quality.
 
@@ -16,7 +16,7 @@ The four demo beats and their model choices:
   Beat 1 -- "Friction gone"
     Question: What is the established role of PCSK9 in LDL-cholesterol regulation?
     Model: Claude Haiku 4.5 (cheapest capable model)
-    Story: A researcher asks a plain background question.  Haiku reads 650 papers,
+    Story: A researcher asks a plain background question.  Haiku reads 1,000 papers,
            cites sources, and returns in seconds.  The Bedrock Guardrail intercepts
            the NCBI URLs and the UI shows the "N links intercepted" badge.
     Why Haiku: The question has a well-established answer.  Haiku is fast,
@@ -125,11 +125,21 @@ CODEGEN_SYSTEM = (
 # The point is that two independent models may notice different things --
 # their disagreements highlight genuinely uncertain areas in the literature.
 # Full NCBI URLs are requested here too so the guardrail is active on Q3.
+# The brevity instruction is load-bearing, not stylistic (added 2026-09-22).
+# Without it Opus 5 ran to whatever max_tokens allowed -- it hit an 8192 ceiling
+# and then a 3000 ceiling exactly, meaning the review was TRUNCATED mid-sentence
+# both times and Sonnet then adjudicated a half-finished review.  A bounded
+# review also has to fit on a projector: nobody in row 12 reads 3,000 tokens.
+# Both reviewers get the identical prompt, so this constrains them symmetrically.
+# The shipped budget is now max_tokens=4096 with thinking disabled for both
+# reviewers (agent.question_3) -- 400 words fits inside that with room to spare.
 REVIEW_SYSTEM = (
     "You are a careful biomedical reviewer. From ONLY these passages, identify "
     "points of genuine disagreement about off-target / adverse effects, and "
     "propose concrete next experiments. Cite inline using full PubMed Central "
-    "URLs, e.g. https://www.ncbi.nlm.nih.gov/pmc/articles/PMCxxxxxxx/."
+    "URLs, e.g. https://www.ncbi.nlm.nih.gov/pmc/articles/PMCxxxxxxx/. "
+    "Be concise: at most 400 words, as a short bulleted list. Finish your final "
+    "sentence -- do not stop mid-thought."
 )
 
 # System prompt for Q3 -- adjudication (Claude Sonnet).

@@ -10,16 +10,60 @@ What this does:
   After running this, sync the corpus to S3 before running build_kb.py:
       aws s3 sync ./corpus s3://<your-bucket>/corpus/
 
+Why E-utilities and not the bulk datasets (checked 2026-09-22):
+  PMC rebuilt its distribution service during 2026 (announced 2026-02-12,
+  completed 2026-08).  Two things that older write-ups of this demo relied on
+  are gone:
+    - The PMC OA Web Service is retired: "the PMC OA Web Service is no longer
+      available" (https://pmc.ncbi.nlm.nih.gov/tools/oa-service/).
+    - "All legacy PMC Article Dataset files on the FTP and Cloud Services were
+      removed the week of August 24, 2026" -- so oa_package/, oa_file_list.csv
+      and the oa_comm / oa_noncomm bundles no longer exist
+      (https://pmc.ncbi.nlm.nih.gov/tools/ftp/).  All that is left on FTP is
+      PMC-ids.csv.gz for ID cross-referencing.
+  Bulk access now means the AWS Open Data bucket s3://pmc-oa-opendata
+  (us-east-1, public, free: `aws s3 ls --no-sign-request s3://pmc-oa-opendata/`
+  -- https://registry.opendata.aws/ncbi-pmc/).
+  None of that affects this script.  It uses E-utilities (esearch + efetch),
+  which PMC still lists as a sanctioned automated-retrieval route alongside the
+  Cloud Service, OAI-PMH and the BioC API: those "are the only services that may
+  be used for automated retrieval of PMC content"
+  (https://pmc.ncbi.nlm.nih.gov/tools/textmining/).  A thousand articles is well
+  inside per-article retrieval; reach for the S3 bucket if you ever want the
+  whole subset.
+
 Why we filter by licence:
-  The PMC Open Access subset has two tiers:
-    - Commercial-use licences (CC0, CC BY): safe to use in a public demo.
-    - Non-commercial licences (CC BY-NC, etc.): NOT allowed in a commercial
-      or public presentation without the author's permission.
-  This script keeps only CC0 and CC BY articles.  The result is a smaller
-  corpus (~650 papers instead of ~2,000) but one you can safely show on stage.
+  PMC groups Open Access Subset licences three ways
+  (https://pmc.ncbi.nlm.nih.gov/tools/textmining/):
+    - Commercial use allowed:   CC0, CC BY, CC BY-SA, CC BY-ND
+    - Non-commercial use only:  CC BY-NC, CC BY-NC-SA, CC BY-NC-ND
+    - Other:                    no machine-readable Creative Commons licence
+  This script keeps only CC0 and CC BY -- deliberately NARROWER than PMC's
+  commercial-use set.  CC BY-SA's share-alike and CC BY-ND's no-derivatives
+  terms are not worth arguing about on a conference stage, and a ~1,000-paper
+  corpus is plenty without them.  Non-commercial articles are excluded outright.
+
+  KNOWN WEAKNESS in the classifier (fetch_article below, not yet fixed): the
+  "cc by" substring test runs BEFORE the non-commercial test, and "cc by-nc" and
+  "cc by-sa" both contain "cc by".  An article whose <permissions> text spells
+  its licence as "CC BY-NC 4.0" rather than as "Attribution-NonCommercial" is
+  therefore labelled CC BY and kept.  Most publishers use the long spelling, so
+  this is a narrow case, but it is a licence mislabel and the order of those
+  branches should be inverted.
+
+  The licence is read from each article's own <permissions> block rather than
+  trusted from a directory split or a search filter, because PMC warns that
+  "License terms vary" per article and that "not all articles in the Open Access
+  Subset have a CC license".  PMC does document up-front filters --
+  '"cc0 license"[filter]' and '"cc by license"[filter]' alongside the
+  '"open access"[filter]' used in search_pmc() below -- and adding them would cut
+  the number of articles fetched and discarded.  They are publisher-supplied
+  metadata, though, so the XML check here stays regardless; treat them as an
+  optimisation, not a replacement.
 
 Output:
-  ./corpus/PMCxxxxxxx.txt   one plain-text article per file.
+  ./corpus/PMCxxxxxxx.txt   one plain-text article per file, TARGET files in all
+  (1,000 -- about 48 MB, overwhelmingly CC BY with a handful of CC0).
   Each file starts with a comment header:
       # PMCxxxxxxx  licence: CC0
 
@@ -51,7 +95,7 @@ import xml.etree.ElementTree as ET
 
 import requests
 
-# The gene we're searching for.  All three demo questions are about PCSK9.
+# The gene we're searching for.  All four demo questions are about PCSK9.
 GENE = "PCSK9"
 
 # Co-terms to narrow the search to PCSK9's most relevant literature.
@@ -61,6 +105,11 @@ EXTRA = "(LDL OR cholesterol OR cardiovascular)"
 # How many articles to keep in the final corpus.
 # We fetch more candidates than this (see over-fetch below) because many
 # articles will be filtered out (non-commercial licence, no body text, too short).
+#
+# Budget the time: at ~55% yield this means roughly 1,800 efetch calls, and NCBI
+# allows 3 requests/sec without an API key (10 with one), so a full run is tens
+# of minutes rather than a couple.  aws.py hard-codes the same 1000 as
+# _EXPECTED_CORPUS_SIZE for the ingestion progress bar -- change both together.
 TARGET = 1000
 
 # Where to write the .txt files.
@@ -72,7 +121,9 @@ API_KEY = os.environ.get("NCBI_API_KEY", "")
 # Base URL for NCBI E-utilities (the API that powers PubMed and PMC).
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
-# Only these licences are safe for a public commercial demo.
+# The licences this demo will show on stage.  Narrower than PMC's own
+# commercial-use set (which also includes CC BY-SA and CC BY-ND) on purpose --
+# see "Why we filter by licence" in the module docstring.
 COMMERCIAL_LICENCES = {"CC0", "CC BY"}
 
 # Delay between requests -- NCBI rate limit is 3/sec without a key, 10/sec with.
@@ -90,6 +141,12 @@ def search_pmc(retmax):
 
     Uses the NCBI ESearch API to retrieve PMC IDs (integers) matching the
     search term.  Paginates in batches of 200 until retmax IDs are collected.
+
+    '"open access"[filter]' is PMC's documented filter for the Open Access
+    Subset (PMC user guide, "By Collection").  It does NOT narrow by licence --
+    the subset spans CC0 through CC BY-NC-ND plus articles with no
+    machine-readable licence at all -- which is why fetch_article() re-checks
+    every article's <permissions> block.
 
     Args:
         retmax: maximum number of IDs to return.
@@ -119,6 +176,48 @@ def search_pmc(retmax):
         retstart += len(batch)
         time.sleep(DELAY)
     return ids[:retmax]
+
+
+def classify_licence(blob: str) -> str:
+    """Classify a PMC <permissions>/<license> blob into a licence name.
+
+    Extracted from fetch_article() on 2026-09-22 so it can be unit-tested --
+    see tests/test_corpus_licence.py.  This is the single gate that keeps
+    non-commercial papers out of a corpus shown in a public commercial talk,
+    so it is worth testing rather than trusting.
+
+    ORDER IS LOAD-BEARING: the restrictive licences are tested FIRST.
+    This code used to test "cc by" before the non-commercial branch -- and the
+    substring "cc by" is contained in "cc by-nc".  An article whose licence text
+    spelled itself "CC BY-NC 4.0" (rather than the long
+    "Attribution-NonCommercial" form) was therefore classified CC BY and KEPT:
+    exactly the failure this filter exists to prevent.  The href test alone was
+    safe ("/licenses/by/" has a trailing slash, so it cannot match
+    "/licenses/by-nc/"); the free-text fallback was not.  Deny-first ordering
+    makes the substring overlap harmless -- the same principle as Cedar's
+    forbid-overrides-permit.
+
+    Note CC BY-SA and CC BY-ND are in PMC's commercial-use group but are
+    deliberately NOT in COMMERCIAL_LICENCES; naming them here means they are
+    skipped explicitly rather than falling through to "CC BY".
+
+    Args:
+        blob: the licence href plus its element text, already lowercased.
+
+    Returns:
+        One of "CC0", "CC BY", "CC BY-NC", "CC BY-ND", "CC BY-SA", "UNKNOWN".
+    """
+    if "by-nc" in blob or "noncommercial" in blob:
+        return "CC BY-NC"
+    if "by-nd" in blob or "noderivs" in blob:
+        return "CC BY-ND"
+    if "by-sa" in blob or "sharealike" in blob:
+        return "CC BY-SA"
+    if "publicdomain" in blob or "cc0" in blob:
+        return "CC0"
+    if "creativecommons.org/licenses/by/" in blob or "cc by" in blob:
+        return "CC BY"
+    return "UNKNOWN"
 
 
 def fetch_article(pmcid):
@@ -164,12 +263,7 @@ def fetch_article(pmcid):
             lic_el.get("{http://www.w3.org/1999/xlink}href", "") + " " + "".join(lic_el.itertext())
         ).lower()
 
-        if "publicdomain" in blob or "cc0" in blob:
-            licence = "CC0"
-        elif "creativecommons.org/licenses/by/" in blob or "cc by" in blob:
-            licence = "CC BY"
-        elif "/by-nc" in blob or "noncommercial" in blob:
-            licence = "CC BY-NC"  # non-commercial -- skip
+        licence = classify_licence(blob)
 
     # Filter out anything that is not explicitly commercial-use.
     if licence not in COMMERCIAL_LICENCES:

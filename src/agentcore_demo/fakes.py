@@ -67,20 +67,28 @@ TEST_PRICING: dict[str, tuple[float, float]] = {
 }
 
 # KB retrieval rate used by CostMeter in tests.
+# Like TEST_PRICING, a round test number and NOT the real rate: S3 Vectors bills
+# $0.0025 per 1,000 QueryVectors requests ($2.50/M).  0.40 happens to be the
+# value config.py carried until 2026-09-22, when it was found to be ~160x too
+# high -- it survives here only because the cost assertions are calibrated to it.
 TEST_KB_RATES = {
-    "kb_query_usd_per_1k": 0.40,  # $0.40 per 1,000 retrieval queries
+    "kb_query_usd_per_1k": 0.40,  # test-only; real rate is 0.0025
 }
 
 # Canned KB setup costs returned by FakeBackend.kb_setup_costs().
-# These are realistic-ish numbers based on a real ~650-paper corpus.
+# Illustrative placeholders for rehearsal, not measurements, and smaller than
+# reality: the live corpus is 1,000 papers / ~48 MB.  Nothing reads these except
+# the UI panel and the tests, so they are left as-is rather than re-derived.
 FAKE_KB_SETUP_COSTS = {
-    "ingestion_usd": 0.10,  # ~$0.10 to embed 650 papers
+    "ingestion_usd": 0.10,  # one-time embedding cost, order of magnitude
     "storage_usd_per_month": 0.025,  # ~$0.025/month for S3 Vectors
     "corpus_storage_usd_per_month": 0.0002,  # ~fractions of a cent for S3
-    "vector_count": 5508,  # typical chunk count for 650 papers
-    "vector_size_mb": 24.2,  # 5508 × 4608 bytes ÷ 1024²
-    "corpus_files": 200,  # subset of the full corpus
-    "corpus_size_mb": 9.8,  # typical size in MB
+    "vector_count": 5508,  # a plausible chunk count
+    # 5508 × 4608 bytes ÷ 1024².  4608 was aws._BYTES_PER_VECTOR before the
+    # 2026-09-22 revision to 6656; not worth re-deriving for a canned value.
+    "vector_size_mb": 24.2,
+    "corpus_files": 200,  # a subset, so a fake run never claims the full corpus
+    "corpus_size_mb": 9.8,  # matching size in MB
 }
 
 # A valid 1×1 transparent PNG encoded in base64.
@@ -121,6 +129,11 @@ class FakeBackend:
         # 0 = instant (for tests); 0.3 = visible animation (for make demo-fake-ingest).
         self._ingest_delay: float = float(os.environ.get("DEMO_FAKE_INGEST_DELAY", "0"))
 
+        # Which of query_gateway()'s three outcomes to return for web_fetch.
+        # Default "denied" is the rehearsed beat-4 path; tests override it to
+        # reach the "error" and "result" branches.  See query_gateway() below.
+        self.gateway_outcome: str = "denied"
+
     def retrieve(self, query: str, n: int = 12) -> list[dict]:
         """Return n plausible-looking passages about PCSK9."""
         self.calls.append(f"retrieve:{query[:20]}")
@@ -134,7 +147,12 @@ class FakeBackend:
         ]
 
     def converse(
-        self, tier: str, system: str, prompt: str, max_tokens: int = 1600
+        self,
+        tier: str,
+        system: str,
+        prompt: str,
+        max_tokens: int = 1600,
+        thinking: str | None = None,
     ) -> tuple[str, dict, list[dict]]:
         """Return a canned response appropriate to the tier and system prompt.
 
@@ -212,13 +230,30 @@ class FakeBackend:
         This mimics the real Cedar ForbidWeb policy that denies web_fetch
         at the AgentCore Gateway level.  The demo relies on this denial to
         show the "Cedar Policy Denied" badge and the KB fallback.
+
+        Set ``gateway_outcome`` to drive the other two branches the real
+        backend can return.  The "error" case matters most: it is the branch
+        added so beat 4 cannot silently succeed when the gateway misbehaves,
+        and without a way to reach it from a fake it would ship untested.
+            "denied"  (default) -- Cedar policy denial, the rehearsed path
+            "error"             -- gateway reachable but the call failed
+            "result"            -- the web fetch actually succeeded
         """
         self.calls.append(f"query_gateway:{tool_name}")
         if tool_name == "web_fetch":
-            return {
-                "denied": True,
-                "reason": ("Cedar policy denied: web_fetch is not permitted in this environment"),
-            }
+            if self.gateway_outcome == "error":
+                return {
+                    "denied": False,
+                    "error": True,
+                    "reason": "gateway call failed: HTTP 500 from gateway endpoint",
+                }
+            if self.gateway_outcome == "denied":
+                return {
+                    "denied": True,
+                    "reason": (
+                        "Cedar policy denied: web_fetch is not permitted in this environment"
+                    ),
+                }
         return {"result": {"content": [{"type": "text", "text": f"[fake result for {tool_name}]"}]}}
 
 

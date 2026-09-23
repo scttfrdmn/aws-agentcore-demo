@@ -39,28 +39,60 @@ Verified AWS quirks (do not "fix" these without checking current docs):
 
   Adaptive thinking is ON by default (2026-09-22):
     Claude Opus 5 and Sonnet 5 run adaptive thinking by default INCLUDING when
-    the request omits a "thinking" field -- which this file does.  Opus 4.7
-    behaved the opposite way (omitting it meant no thinking), so the Sept 2026
-    model bump silently turned thinking on.
-    Consequences to watch, in order of importance for a live demo:
+    the request omits a "thinking" field.  Opus 4.7 behaved the opposite way
+    (omitting it meant no thinking), so the Sept 2026 model bump silently turned
+    thinking on.
+    Consequences, in order of importance for a live demo:
       1. Latency goes up.  Re-time the run before the talk.
       2. Thinking tokens bill as OUTPUT tokens, so the receipt grows by more
          than the headline rate change suggests.
-      3. Answer quality on Q3 should improve, which is why it is left on.
-    To turn it off if rehearsal timing demands, pass
-      additionalModelRequestFields={"thinking": {"type": "disabled"}}
-    to converse().  Both models accept that (Opus 5 caps effort at "high"
-    when thinking is disabled).  Deliberately NOT done here -- measure first.
+      3. The reasoning text is NEVER displayed, so on this demo it was ~80s of a
+         300s budget spent on output nobody sees.
+    converse() therefore takes a `thinking` argument: pass thinking="disabled"
+    and it sends additionalModelRequestFields={"thinking": {"type": "disabled"}}.
+    agent.question_3 does exactly that for both Q3 reviewers, which is what took
+    Q3 from 141s to 48s.  Everywhere else the default is left alone.
+    The field is ANTHROPIC-ONLY: sending it to GPT-6 Astra returns
+    ValidationException (unknown_parameter), so converse() gates on the model ID
+    containing "anthropic" rather than on the tier name.
 
   Cedar policy denial shape (2026-05-21):
     A Cedar ENFORCE denial comes back as HTTP 200 with a JSON-RPC error body
     containing "Tool Execution Denied: ..." in the message field -- NOT as
     HTTP 403.  query_gateway() checks for this pattern explicitly.
 
-  AgentCore Gateway tool naming (2026-05-21):
-    MCP tool names on the gateway use the format "{target-name}___{tool-name}"
-    (three underscores).  Our target is named "web-tools", so web_fetch becomes
-    "web-tools___web_fetch" in the tools/call JSON-RPC payload.
+  AgentCore Gateway tool naming (2026-05-21, re-verified 2026-09-22):
+    MCP tool names on the gateway use the format "${target_name}___${tool_name}"
+    (three underscores) -- see
+    https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-tool-naming.html
+    Our target is named "web-tools", so web_fetch becomes "web-tools___web_fetch"
+    in the tools/call JSON-RPC payload.  The Cedar rule matches that SAME prefixed
+    string as its action -- ``AgentCore::Action::"web-tools___web_fetch"``, verified
+    against real AWS 2026-09-22.  Do not go back to matching
+    ``context.toolName == "web_fetch"``: that form never fired, and because the
+    denial then came from something else entirely, the UI looked right anyway.
+
+  The web_fetch tool is a real OpenAPI target (2026-09-22):
+    "web-tools" is an MCP-category **OpenAPI** gateway target over the public
+    ClinicalTrials.gov v2 API; build_kb.web_tools_openapi_schema() holds the
+    inline schema, whose single operationId is "web_fetch".  There is no Lambda
+    anywhere in this repo.  Tool *arguments* are therefore that operation's query
+    parameters ("query.term", "filter.overallStatus", "pageSize", ...), not a
+    free-form {"url": ...} -- the old shape, which no target ever accepted.
+
+    HTTP *passthrough* targets cannot be used for this beat: they are in the HTTP
+    target category, which AWS documents as path-routed
+    ("https://{gatewayId}.gateway.bedrock-agentcore.{region}.amazonaws.com/{targetName}/{path}")
+    and explicitly NOT aggregated into tools/list.  With no MCP tool there is no
+    "web-tools___web_fetch" action name for the rehearsed ForbidWeb rule to match,
+    so the rule would simply stop applying.  See
+    https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-targets-http.html
+
+  Gateway failures are NOT denials (2026-09-22):
+    query_gateway() returns three distinct outcomes -- denied / result / error.
+    Only a message matching _is_policy_denial() may claim a Cedar denial; every
+    other failure returns {"error": True} so beat 4 cannot silently succeed or
+    silently fake its own badge.
 """
 
 from __future__ import annotations
@@ -70,6 +102,7 @@ import time
 from collections.abc import Callable
 
 import boto3
+from botocore.config import Config as BotoConfig
 
 from agentcore_demo.backend import Backend
 
@@ -77,13 +110,63 @@ __all__ = ["AwsBackend", "Backend"]
 
 # Actual number of CC0/CC BY PCSK9 papers pulled from PMC.
 # Used as the denominator in the ingestion progress bar.
-_EXPECTED_CORPUS_SIZE = 657
+# Corrected 2026-09-22: was 657, but the corpus in S3 is 1000 objects (48 MB) --
+# the May run was scaled back up to the original 1000-paper target and this
+# constant was never updated, so the progress bar over-reported by ~1.5x.
+_EXPECTED_CORPUS_SIZE = 1000
 
 # Titan Embed V2 produces 1024-dimensional float32 vectors.
 # Each float32 is 4 bytes, so the vector data alone is 4 096 bytes.
-# S3 Vectors also stores per-vector metadata; we budget ~512 bytes for that.
-# This constant is used to estimate storage cost when ListVectors is called.
-_BYTES_PER_VECTOR = 4096 + 512
+#
+# Metadata revised 2026-09-22 (was a flat 512-byte budget, which was too low).
+# The dominant metadata item is AMAZON_BEDROCK_TEXT, which Bedrock populates
+# with the chunk's own text -- not a short reference to it.  build_kb.py uses
+# FIXED_SIZE chunking at maxTokens=512, and 512 tokens of English prose is
+# roughly 2 KB, so the text alone is ~4x the old budget.  Add a few hundred
+# bytes for the source URI and Bedrock's other managed keys.
+#
+# This is an ESTIMATE, and the KB panel labels it as such ("from vector
+# count", not metered): S3 Vectors has no API that reports an index's stored
+# size, so there is nothing to measure.  Erring high is the honest direction
+# -- it overstates a cost rather than understating it -- and at this scale the
+# whole line is still fractions of a cent per month.
+_BYTES_PER_VECTOR = 4096 + 2048 + 512
+
+
+def _gw_mcp_url(base: str) -> str:
+    """Return the gateway's MCP endpoint, whether or not `base` already ends in /mcp.
+
+    Defensive because the value is copy-pasted by a human from build_kb.py's
+    output into config.py, and the two sides disagreed about the suffix once
+    already.  Idempotent: appending /mcp twice is the failure this prevents.
+    """
+    trimmed = base.rstrip("/")
+    return trimmed if trimmed.endswith("/mcp") else trimmed + "/mcp"
+
+
+def _is_policy_denial(message: str) -> bool:
+    """Return True only for messages that are recognisably a Cedar policy denial.
+
+    Kept deliberately narrow and in one place.  Everything that is *not* matched
+    here becomes a visible error rather than a "Cedar Policy Denied" badge, so a
+    loose match would let an unrelated failure impersonate the security story
+    beat 4 is making.  "Tool Execution Denied" is the phrasing AgentCore actually
+    returns (verified 2026-05-21); the other two are defensive.
+
+    Args:
+        message: the JSON-RPC error message, or an HTTP error body.
+
+    Returns:
+        Whether the message indicates an authorization denial.
+    """
+    lowered = message.lower()
+    return (
+        "tool execution denied" in lowered
+        or "not allowed" in lowered
+        # Broad, but only reached alongside an explicit denial vocabulary check
+        # -- "policy" alone appearing in an unrelated stack trace is unlikely.
+        or ("denied" in lowered and "policy" in lowered)
+    )
 
 
 def _format_source(uri: str) -> str:
@@ -126,6 +209,7 @@ class AwsBackend:
         guardrail_id: str = "",
         guardrail_version: str = "DRAFT",
         gateway_url: str = "",
+        gateway_target: str = "web-tools",
     ):
         """
         Args:
@@ -139,6 +223,10 @@ class AwsBackend:
             guardrail_id: optional Bedrock Guardrail ID; empty string disables it.
             guardrail_version: the guardrail version to use (default "DRAFT").
             gateway_url: optional AgentCore Gateway URL; empty string disables it.
+            gateway_target: the Gateway target name that publishes web_fetch.
+                Must equal the target name build_kb.py creates, because MCP tool
+                names are "{target}___{tool}".  Defaults to the demo's value so
+                existing callers (app.py, run.py) need no change.
         """
         self.region = region
         self.kb_id = kb_id
@@ -149,10 +237,28 @@ class AwsBackend:
         self.guardrail_id = guardrail_id
         self.guardrail_version = guardrail_version
         self.gateway_url = gateway_url
+        self.gateway_target = gateway_target
 
         # Separate boto3 clients for the three different Bedrock service endpoints.
         self._kb = boto3.client("bedrock-agent-runtime", region_name=region)  # retrieval
-        self._llm = boto3.client("bedrock-runtime", region_name=region)  # model calls
+        # Model calls get a long read timeout.  botocore defaults to 60s, and
+        # that is no longer enough: Claude Opus 5 with adaptive thinking on (the
+        # default -- see the module docstring) at maxTokens=8192 took longer than
+        # that on Q3 and raised ReadTimeoutError mid-run on 2026-09-22.  The
+        # demo failed at beat 3 before this was raised.  Q3 now runs with thinking
+        # disabled at maxTokens=4096 and finishes in ~48s, so the 600s ceiling is
+        # no longer load-bearing -- it stays as free insurance for a slow day.
+        # retries are left at botocore's default mode but capped low: a silent
+        # retry of a 2-minute Opus call would blow the demo's timing budget.
+        self._llm = boto3.client(
+            "bedrock-runtime",
+            region_name=region,
+            config=BotoConfig(
+                read_timeout=600,
+                connect_timeout=15,
+                retries={"max_attempts": 2, "mode": "standard"},
+            ),
+        )
         self._agent = boto3.client("bedrock-agent", region_name=region)  # ingestion mgmt
 
         # Set after kb_ingest() completes; used by kb_setup_costs() to avoid
@@ -161,6 +267,35 @@ class AwsBackend:
 
         # Set to True by kb_flush() to force a new ingestion on next call.
         self._force_reingest: bool = False
+
+    @classmethod
+    def from_config(cls, config, rates: dict[str, float] | None = None) -> AwsBackend:
+        """Build an AwsBackend from a config module -- the ONLY supported way.
+
+        Added 2026-09-22 after a real divergence bug.  app.py passed
+        guardrail_id / guardrail_version / gateway_url; run.py passed none of
+        them.  The headless runner therefore ran with the Bedrock Guardrail and
+        the AgentCore Gateway silently DISABLED, so `make demo-headless` -- the
+        very command the README offers for verifying the demo -- exercised
+        neither beat 1's link interception nor beat 4's Cedar denial, and beat 4
+        reported "No gateway configured" instead of a policy denial.
+
+        Two call sites constructing the same object with different arguments is
+        the bug; one constructor is the fix.  Add new backend wiring HERE, never
+        in app.py or run.py.
+        """
+        return cls(
+            config.REGION,
+            config.KB_ID,
+            config.DATA_SOURCE_ID,
+            config.MODELS,
+            rates=rates,
+            vector_bucket_name=getattr(config, "VECTOR_BUCKET_NAME", ""),
+            guardrail_id=getattr(config, "GUARDRAIL_ID", ""),
+            guardrail_version=getattr(config, "GUARDRAIL_VERSION", "DRAFT"),
+            gateway_url=getattr(config, "GATEWAY_URL", ""),
+            gateway_target=getattr(config, "GATEWAY_TARGET_NAME", "web-tools"),
+        )
 
     def retrieve(self, query: str, n: int = 12) -> list[dict]:
         """Run a semantic search against the Bedrock Knowledge Base.
@@ -202,7 +337,12 @@ class AwsBackend:
         ]
 
     def converse(
-        self, tier: str, system: str, prompt: str, max_tokens: int = 1600
+        self,
+        tier: str,
+        system: str,
+        prompt: str,
+        max_tokens: int = 1600,
+        thinking: str | None = None,
     ) -> tuple[str, dict, list[dict]]:
         """Invoke a Bedrock foundation model and return text, token usage, and guardrail hits.
 
@@ -234,6 +374,10 @@ class AwsBackend:
             system: the system prompt text.
             prompt: the user message text.
             max_tokens: the maximum number of output tokens to generate.
+            thinking: None (default) leaves the model's own setting alone, which
+                on Claude 5 models means adaptive thinking is ON.  "disabled"
+                turns it off -- Anthropic models only; see the note below and the
+                module docstring.
 
         Returns:
             (text, usage, matches) where:
@@ -249,6 +393,22 @@ class AwsBackend:
             # temperature is deliberately absent -- current models reject it.
             "inferenceConfig": {"maxTokens": max_tokens},
         }
+        # Adaptive thinking is ON by default on Claude 5 models, and its output
+        # is NEVER shown to the audience (thinking.display defaults to omitted).
+        # Measured on Opus 5 with a ~30K-token prompt on 2026-09-22:
+        #   thinking on  -> 43.4s, 2,733 output tokens, blocks [reasoningContent, text]
+        #   thinking off -> 27.5s, 1,631 output tokens, blocks [text]
+        # Same visible answer, 37% faster, 40% fewer billed output tokens.  Callers
+        # that care about the demo's timing budget pass thinking="disabled".
+        # "thinking" is an ANTHROPIC-specific field.  Sending it to GPT-6 Astra
+        # returns ValidationException: unknown_parameter 'thinking' (observed
+        # 2026-09-22), so gate on the vendor rather than the tier -- that keeps
+        # this correct if a tier is ever repointed at a different vendor.
+        # Astra needs no equivalent: it already returns a single text block and
+        # answered in 26s, so there is no hidden reasoning to suppress.
+        model_id = self.models.get(tier, "")
+        if thinking == "disabled" and "anthropic" in model_id:
+            kwargs["additionalModelRequestFields"] = {"thinking": {"type": "disabled"}}
         if self.guardrail_id:
             kwargs["guardrailConfig"] = {
                 "guardrailIdentifier": self.guardrail_id,
@@ -256,7 +416,63 @@ class AwsBackend:
                 "trace": "enabled",  # needed to see which URLs were intercepted
             }
         resp = self._llm.converse(**kwargs)
-        text = resp["output"]["message"]["content"][0]["text"]
+
+        # Join every text block, rather than assuming content[0] is one.
+        #
+        # This line used to read content[0]["text"] and that broke the demo the
+        # first time it ran on Claude 5 (2026-09-22, KeyError: 'text' on Q2).
+        # Opus 5 and Sonnet 5 run adaptive thinking by default even when the
+        # request omits a "thinking" field -- which this method does -- so the
+        # FIRST content block is now a reasoning block and the visible answer
+        # comes later.  Opus 4.7 put text at index 0, which is why this was
+        # never wrong before the model refresh.  Haiku 4.5 still puts text
+        # first, which is why beat 1 passed and only beat 2 blew up.
+        #
+        # Converse may also legitimately split one answer across several text
+        # blocks, so concatenating is more correct than picking the first.
+        blocks = resp["output"]["message"]["content"]
+        text = "".join(b["text"] for b in blocks if "text" in b)
+        if not text:
+            # Fail loudly and diagnosably rather than returning "" and letting a
+            # blank panel appear on stage with no explanation.
+            kinds = [k for b in blocks for k in b]
+            raise RuntimeError(
+                f"converse() returned no text block for tier {tier!r} "
+                f"(model {self.models.get(tier)!r}); block keys were {kinds}. "
+                "If this is a refusal, check stop_reason -- Claude Fable/Mythos "
+                "models can decline with stop_reason='refusal'."
+            )
+
+        # GPT-6 Astra reports prompt tokens in the CACHE fields, not inputTokens
+        # (2026-09-22).  Measured on the identical Q3 prompt:
+        #     Claude Opus 5      inputTokens = 13,107  cacheWrite =     0
+        #     OpenAI GPT-6 Astra inputTokens =      2  cacheWrite = 3,614
+        # So nothing is missing -- Astra runs implicit prompt caching and books the
+        # prompt as a cache WRITE, leaving inputTokens at ~0.  Taken at face value
+        # that understates Astra's input cost by ~$0.14 per Q3, which on a talk
+        # whose whole thesis is honest cost numbers is the worst place to be
+        # quietly wrong (it made Q3 look like $0.1587 instead of $0.2556).
+        #
+        # Fix: when inputTokens is implausible for the prompt we actually sent,
+        # fall back to the cache counters, which are REAL metered numbers.  Only
+        # if those are absent too do we resort to a chars/4 estimate, and we flag
+        # that case so the receipt can say "estimated" rather than "metered".
+        #
+        # Caveat we accept knowingly: Bedrock prices cache writes at ~1.25x input
+        # and cache reads at ~0.1x, so folding them into inputTokens at the plain
+        # input rate is approximate.  It is approximate in the third decimal place;
+        # the alternative was wrong in the first.
+        usage = dict(resp.get("usage", {}))
+        est_input_tokens = (len(system) + len(prompt)) // 4
+        if est_input_tokens > 100 and usage.get("inputTokens", 0) < est_input_tokens // 10:
+            usage["inputTokensReported"] = usage.get("inputTokens", 0)
+            cached = usage.get("cacheWriteInputTokens", 0) + usage.get("cacheReadInputTokens", 0)
+            if cached > 0:
+                usage["inputTokens"] = cached
+                usage["inputTokensFromCacheFields"] = True
+            else:
+                usage["inputTokens"] = est_input_tokens
+                usage["inputTokensEstimated"] = True
 
         # Parse guardrail matches from the response trace.
         # The trace structure: resp.trace.guardrail.outputAssessments.{assessmentId: [...]}.
@@ -272,7 +488,7 @@ class AwsBackend:
                                 {"name": r["name"], "match": r["match"], "action": r["action"]}
                             )
 
-        return text, resp["usage"], matches
+        return text, usage, matches
 
     def code_interpreter_run(self, code: str) -> tuple[str, float]:
         """Execute Python code in an isolated AgentCore Code Interpreter microVM.
@@ -411,7 +627,7 @@ class AwsBackend:
         This does NOT delete anything from AWS -- the KB stays fully indexed.
         It only clears the local ready flag so the ingestion progress view
         reappears in the browser.  Useful for rehearsal: you can re-watch the
-        ingestion animation without actually re-indexing all 650 papers.
+        ingestion animation without actually re-indexing all 1,000 papers.
         """
         self._force_reingest = True
         self._ingestion_stats = None
@@ -420,27 +636,50 @@ class AwsBackend:
         """Invoke a tool on the AgentCore Gateway via the MCP HTTP endpoint.
 
         The Gateway exposes tools over an MCP-compatible JSON-RPC HTTP interface.
-        We POST a tools/call request and inspect the response for Cedar policy
-        denials.
+        We POST a tools/call request and classify the response into exactly one
+        of three outcomes (see Returns).
+
+        Why three outcomes and not two:
+            This used to collapse everything that was not obviously a success
+            into ``{"denied": True}``, which made two opposite failures invisible
+            in opposite directions.  A tool-not-found error -- the shape you get
+            if the "web-tools" target is missing or FAILED -- carries none of the
+            denial keywords, so it fell through to the SUCCESS branch and the
+            "Cedar Policy Denied" badge silently never appeared.  Meanwhile a
+            DNS blip or a stale GATEWAY_URL reported itself AS a Cedar denial,
+            which is a lie told on stage.  Beat 4's whole claim is "the policy
+            stopped this", so only a recognised denial may say so.
 
         Cedar policy denial quirk (verified 2026-05-21):
             Denials arrive as HTTP 200 with a JSON-RPC error body, NOT HTTP 403.
             The error message contains "Tool Execution Denied" or "not allowed".
-            This function checks for both patterns and returns {"denied": True}.
 
-        MCP tool naming quirk (verified 2026-05-21):
-            The Gateway prefixes tool names with the target name plus three
-            underscores.  Our gateway target is "web-tools", so the web_fetch
-            tool must be requested as "web-tools___web_fetch".
+        MCP tool naming quirk (verified 2026-05-21, re-verified 2026-09-22 against
+        https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-tool-naming.html):
+            Gateway tool names are "${target_name}___${tool_name}" -- three
+            underscores.  Our target is "web-tools" and, because it is an OpenAPI
+            target, the tool half is the operationId from the inline schema in
+            build_kb.py.  Hence "web-tools___web_fetch".
+
+        MCP tool-level errors (verified 2026-09-22):
+            MCP distinguishes protocol errors (a top-level "error") from tool
+            errors (a "result" carrying ``isError: true``).  Both are treated as
+            failures here; only the former can ever be a Cedar denial.
 
         Args:
             tool_name: the short tool name (e.g. "web_fetch" -- without the prefix).
-            arguments: a dict of tool arguments (e.g. {"url": "https://..."}).
+            arguments: tool arguments.  For web_fetch these are the
+                ClinicalTrials.gov v2 query parameters declared in the target's
+                OpenAPI schema, e.g. {"query.term": "PCSK9", "pageSize": 5}.
 
         Returns:
-            {"result": response_body}  on success, or
-            {"denied": True, "reason": "..."} if Cedar policy denied the call
-            or no gateway is configured.
+            {"denied": True, "reason": "..."}  -- a *recognised* Cedar denial.
+                Only this outcome may drive the "Cedar Policy Denied" badge.
+            {"result": response_body}  -- a genuine tool success.
+            {"error": True, "reason": "..."}  -- anything else: unreachable
+                gateway, unconfigured gateway, HTTP error, unparseable body,
+                tool not found, schema error.  Callers must surface this rather
+                than treating it as either a success or a denial.
         """
         import json  # noqa: PLC0415
         import ssl  # noqa: PLC0415
@@ -448,11 +687,13 @@ class AwsBackend:
         import urllib.request  # noqa: PLC0415
 
         if not self.gateway_url:
-            return {"denied": True, "reason": "No gateway configured"}
+            # Not a denial: nothing was evaluated, because there is no gateway.
+            # Saying "denied" here would fake the badge on a misconfigured box.
+            return {"error": True, "reason": "No gateway configured (GATEWAY_URL is empty)"}
 
-        # Prepend the target name to form the full MCP tool name.
-        # "web-tools" is the name of the Lambda-backed gateway target.
-        mcp_tool_name = f"web-tools___{tool_name}"
+        # Prepend the target name to form the full MCP tool name.  "web-tools" is
+        # the OpenAPI gateway target created by build_kb.create_gateway_target().
+        mcp_tool_name = f"{self.gateway_target}___{tool_name}"
 
         payload = json.dumps(
             {
@@ -464,7 +705,11 @@ class AwsBackend:
         ).encode()
 
         req = urllib.request.Request(
-            self.gateway_url.rstrip("/") + "/mcp",
+            # Tolerate a gateway URL given either with or without the /mcp
+            # suffix.  build_kb.py used to print it WITH /mcp while this line
+            # appended a second one, so a pasted value produced ".../mcp/mcp"
+            # and every beat-4 call failed.  Accept both spellings (2026-09-22).
+            _gw_mcp_url(self.gateway_url),
             data=payload,
             method="POST",
             headers={
@@ -475,21 +720,44 @@ class AwsBackend:
         ctx = ssl.create_default_context()
         try:
             with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
-                body = json.loads(resp.read())
-                # Cedar denials are HTTP 200 with an "error" key in the JSON-RPC body.
-                if "error" in body:
-                    msg = body["error"].get("message", "")
-                    if "Denied" in msg or "policy" in msg.lower() or "not allowed" in msg.lower():
-                        return {"denied": True, "reason": f"Cedar policy denied: {msg}"}
-                return {"result": body}
+                raw = resp.read()
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
-            if e.code == 403:
-                # Fallback: some configurations do return HTTP 403.
+            if e.code == 403 and _is_policy_denial(body):
+                # Some configurations do return HTTP 403 for a denial -- but only
+                # call it one if the body actually says so.  A bare 403 is far
+                # more likely to be missing IAM permission on InvokeGateway.
                 return {"denied": True, "reason": f"Cedar policy denied: {body[:200]}"}
-            return {"denied": True, "reason": f"HTTP {e.code}: {body[:200]}"}
-        except Exception as ex:  # noqa: BLE001
-            return {"denied": True, "reason": str(ex)}
+            return {"error": True, "reason": f"HTTP {e.code}: {body[:200]}"}
+        except Exception as ex:  # noqa: BLE001 -- urllib raises a wide variety
+            return {"error": True, "reason": f"{type(ex).__name__}: {ex}"}
+
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            return {"error": True, "reason": f"Malformed gateway response: {raw[:200]!r}"}
+        if not isinstance(body, dict):
+            return {"error": True, "reason": f"Unexpected gateway response: {str(body)[:200]}"}
+
+        # JSON-RPC protocol error.  Cedar denials land here; so do tool-not-found
+        # and schema-validation errors, which must NOT be mistaken for denials.
+        if "error" in body:
+            msg = str(body["error"].get("message", "") if isinstance(body["error"], dict) else "")
+            if _is_policy_denial(msg):
+                return {"denied": True, "reason": f"Cedar policy denied: {msg}"}
+            return {"error": True, "reason": f"Gateway error (not a policy denial): {msg[:200]}"}
+
+        # MCP tool-level error: a result that reports its own failure.
+        result = body.get("result")
+        if isinstance(result, dict) and result.get("isError"):
+            return {"error": True, "reason": f"Tool reported an error: {str(result)[:200]}"}
+
+        # A well-formed JSON-RPC success MUST carry "result".  If it does not, we
+        # do not know what we are looking at, so we refuse to call it a success.
+        if result is None:
+            return {"error": True, "reason": f"Gateway response had no result: {str(body)[:200]}"}
+
+        return {"result": body}
 
     def kb_setup_costs(self) -> dict:
         """Return KB setup costs and quantitative context for the sidebar panel.
@@ -539,7 +807,7 @@ class AwsBackend:
         GetVectorBucket does not return a sizeBytes field, so we page through
         all vectors with ListVectors and multiply by the known bytes-per-vector
         for Titan Embed V2.  This is only called for the sidebar panel and runs
-        quickly for a ~650-paper corpus.
+        quickly at this corpus's scale (1,000 papers, a few thousand vectors).
 
         Returns:
             (vector_count, size_mb)
@@ -644,8 +912,9 @@ class AwsBackend:
         """Compute monthly S3 standard storage cost for the local corpus directory.
 
         Uses the S3 standard storage rate (first 50 TB tier, us-west-2: $0.023/GB-month).
-        For a 650-paper corpus of ~10 MB the cost is fractions of a cent -- included
-        in the sidebar for completeness, not because it's a meaningful expense.
+        For this corpus -- 1,000 papers, ~48 MB -- that is about $0.001/month:
+        included in the sidebar for completeness, not because it is a meaningful
+        expense.
 
         Falls back to the hard-coded $0.023/GB-month rate if the Price List
         lookup in pricing.py was not available at startup.

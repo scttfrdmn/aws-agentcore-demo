@@ -83,8 +83,12 @@ CODE_INTERPRETER_PER_SECOND = 0.0000301
 # The app fetches current rates from the AWS Price List at startup.
 # These values are used as a fallback when that call fails.
 # Verify them against the live pricing page and keep them roughly current.
-S3V_STORAGE_USD_PER_GB_MONTH = 0.05  # fallback -- S3 Vectors storage per GB/month
-S3V_QUERY_USD_PER_1K = 0.40  # fallback -- KB retrieval per 1,000 queries
+S3V_STORAGE_USD_PER_GB_MONTH = 0.06  # fallback -- S3 Vectors storage per GB/month
+# $2.50 per MILLION QueryVectors requests.  Re-read from the AWS S3 pricing page
+# 2026-09-22; the old value here was 0.40 (per THOUSAND), ~160x too high.
+# pricing.py documents the full three-term query cost model and why we meter
+# only the request fee at this index size.
+S3V_QUERY_USD_PER_1K = 0.0025  # fallback -- KB retrieval per 1,000 queries
 EMBED_USD_PER_1M_TOKENS = 0.02  # fallback -- Titan Embed v2 per 1M tokens
 
 # Alias used by CostMeter (keeps the config key consistent with pricing module):
@@ -95,6 +99,16 @@ GATEWAY_NAME = "inside-the-lines-gateway"
 GATEWAY_ID = ""
 GATEWAY_URL = ""
 GATEWAY_ENGINE_ID = ""
+
+# The Gateway target that publishes the web_fetch tool for beat 4.  Changing this
+# renames the MCP tool, because Gateway tool names are "{target}___{tool}" -- so
+# it must stay in step with AwsBackend(gateway_target=...) in aws.py AND with the
+# ForbidWeb Cedar rule in build_kb.py, whose action is the WHOLE prefixed name:
+#     AgentCore::Action::"web-tools___web_fetch"
+# (verified against real AWS 2026-09-22 -- matching on the short tool half never
+# fired).  There is no reason to change it; it is here so the coupling between
+# those three files is visible in one place.
+GATEWAY_TARGET_NAME = "web-tools"
 
 # --- web app ------------------------------------------------------------
 HOST = "127.0.0.1"

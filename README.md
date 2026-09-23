@@ -10,15 +10,21 @@ AI agents running entirely within a secure AWS boundary, billed only for
 what they use.
 
 The agent answers four questions about the gene *PCSK9* against a Bedrock
-Knowledge Base of ~650 open-access PMC papers, with a live cost meter and
-a receipt at the end.
+Knowledge Base of 1,000 open-access PMC papers (~48 MB), with a live cost
+meter and a receipt at the end.
 
 | Beat | Question | Models | Security feature |
 |------|----------|--------|-----------------|
 | Q1 | Role of PCSK9 in LDL regulation | Claude Haiku | **Bedrock Guardrail** intercepts NCBI URLs → redirects to local corpus |
 | Q2 | Compare trial LDL-lowering + chart | Claude Sonnet + Code Interpreter | Isolated microVM for code execution |
 | Q3 | Where does the literature disagree? | Claude Opus + OpenAI GPT-6 Astra (parallel) + Sonnet adjudicates | **Bedrock Guardrail** (same as Q1) |
-| Q4 | Search ClinicalTrials.gov for ongoing trials | Claude Haiku | **AgentCore Gateway Cedar policy** blocks web access |
+| Q4 | Search ClinicalTrials.gov for ongoing trials | Claude Haiku | **AgentCore Gateway Cedar policy** blocks a real web tool |
+
+Q4 is worth a note: the `web_fetch` tool the agent reaches for is not a prop. It is
+an AgentCore Gateway **OpenAPI target** (`web-tools`) pointing at the public
+ClinicalTrials.gov v2 API — no Lambda, nothing to maintain. Remove the Cedar
+`ForbidWeb` policy and the call really does fetch trials. The demo's point is that
+the *policy* stops it.
 
 ---
 
@@ -26,12 +32,18 @@ a receipt at the end.
 
 - AWS account with Bedrock model access enabled in **us-west-2**
   (check: `aws bedrock list-inference-profiles --region us-west-2`)
-- Four models must be ACTIVE: Haiku 4.5, Sonnet 5, Opus 5, OpenAI GPT-6 Astra
-  (OpenAI models have no in-Region option on `bedrock-runtime` — the `us.`
-  cross-Region profile below is required, not optional)
+- Four reasoning models must be ACTIVE: Haiku 4.5, Sonnet 5, Opus 5, OpenAI
+  GPT-6 Astra (OpenAI models have no in-Region option on `bedrock-runtime` —
+  the `us.` cross-Region profile below is required, not optional)
+- Amazon Titan Text Embeddings V2 (`amazon.titan-embed-text-v2:0`) must also be
+  ACTIVE — it is what embeds the corpus into the Knowledge Base
 - An S3 bucket you own (e.g. `my-inside-the-lines-corpus`)
 - Python 3.11+ and [`uv`](https://github.com/astral-sh/uv)
-- AWS CLI configured with Bedrock, S3, IAM, and bedrock-agentcore-control permissions
+- AWS CLI configured with permissions for `iam`, `s3`, `s3vectors`, `bedrock`,
+  `bedrock-agent`, `bedrock-runtime`, `bedrock-agent-runtime`,
+  `bedrock-agentcore-control` and `bedrock-agentcore` (Code Interpreter +
+  Gateway). Read access to the AWS Price List API (`pricing`, us-east-1) is
+  optional — without it the demo falls back to the rates in `config.py`.
 
 ---
 
@@ -73,8 +85,13 @@ MODELS = {
 make corpus
 ```
 
-Downloads ~650 CC0 / CC BY PCSK9 papers from PubMed Central.
-Takes about 5 minutes. Stores them in `corpus/` (gitignored, local only).
+Downloads 1,000 CC0 / CC BY PCSK9 papers (~48 MB) from PubMed Central via the
+NCBI E-utilities API, and stores them in `corpus/` (gitignored, local only).
+
+Budget at least 10–15 minutes: reaching 1,000 keepers takes roughly 1,800
+`efetch` calls, and NCBI rate-limits anonymous callers to 3 requests/sec.
+Setting `NCBI_API_KEY` raises that to 10/sec — see the header of
+`corpus_fetch.py` for how to get a key and for how the licence filter works.
 
 ### 4. Upload the corpus to S3
 
@@ -88,9 +105,18 @@ AWS_PROFILE=your-profile aws s3 sync corpus/ s3://YOUR-BUCKET/corpus/ --region u
 AWS_PROFILE=your-profile make build-kb
 ```
 
-This takes about 10 minutes. It creates the IAM role, S3 Vectors store,
-Bedrock Knowledge Base, runs the ingestion job, creates the Guardrail,
-and sets up the AgentCore Gateway with Cedar policies.
+This takes about 10 minutes. It creates two IAM service roles (one for the
+Knowledge Base, one for the Gateway), the S3 Vectors store, the Bedrock
+Knowledge Base and its S3 data source, runs the ingestion job, creates the
+Guardrail, and sets up the AgentCore Gateway — the `web-tools` OpenAPI target
+that publishes `web_fetch`, plus the Cedar policies that deny it.
+
+Every step is get-or-create, so re-running is safe and cheap.
+
+If the gateway target does not reach `READY`, the script **stops with the
+target's own `statusReasons`** rather than continuing. That is deliberate: a
+missing target is exactly what makes Q4 fail silently, so it has to fail loudly
+here instead of on stage.
 
 When it finishes, paste the printed IDs into `config.py`.
 
@@ -100,8 +126,25 @@ When it finishes, paste the printed IDs into `config.py`.
 AWS_PROFILE=your-profile make demo-headless
 ```
 
-Runs all three main questions and prints a receipt. Expected cost: **$0.20–0.40**.
-Q4 should print `Cedar policy denied: web_fetch is not permitted`.
+Runs all four questions and prints a receipt. Expected cost: **about $0.32** —
+a full four-question run measured **$0.317** on 2026-09-22. Q3 dominates it,
+because GPT-6 Astra is the priciest model in the set.
+
+Under Q4, the line to look for is:
+
+```
+  ▸ web access denied by Cedar policy — answering from knowledge base
+```
+
+If instead you see `gateway call failed (NOT a policy denial): ...`, the Cedar
+policy is not what stopped the call — read the reason. Most likely the
+`web-tools` target is missing or `GATEWAY_URL` in `config.py` is stale. Do not
+go on stage until Q4 reports the Cedar denial.
+
+Note that the headless renderer prints only the `phase` line above; it does not
+render the `policy_denied` or `guardrail` events themselves. To *see* the "Cedar
+Policy Denied" and "N links intercepted" badges — the two security beats — run
+the web app (`make demo`, or `make demo-fake` with no credentials).
 
 ---
 
@@ -133,23 +176,53 @@ make demo-fake-ingest
 
 ## Teardown
 
+**Check first, then delete:**
+
 ```bash
-AWS_PROFILE=your-profile make teardown
+AWS_PROFILE=your-profile make teardown-dry-run   # lists what WOULD be deleted
+AWS_PROFILE=your-profile make teardown           # actually deletes it
 ```
 
-Deletes the Knowledge Base, S3 Vectors store, Guardrail, AgentCore Gateway,
-Cedar PolicyEngine, Lambda function, all IAM roles, and the S3 corpus bucket.
-The local `corpus/` directory is not deleted (it is on your machine, not in AWS).
+Deletes the Knowledge Base and its data source, the S3 Vectors bucket and index,
+the Guardrail, the AgentCore Gateway and its targets, the Cedar PolicyEngine and
+its policies, both IAM roles, and the S3 corpus bucket. It also removes the local
+`corpus/` directory — re-run `make corpus` to rebuild it.
+
+**It finds resources it did not create.** Everything `build_kb.py` makes is
+tagged `Project=inside-the-lines`, and teardown sweeps by that tag *and* by
+normalised name prefix, not just by the IDs currently in your `config.py`. That
+matters: this repo previously leaked a whole generation of resources every time a
+name in `config.py` changed between a build and a teardown — three S3 Vector
+buckets, a Knowledge Base stuck in `DELETE_UNSUCCESSFUL`, two orphaned Cedar
+policy engines, an orphaned Guardrail and two orphaned IAM roles. `--dry-run`
+prints why each item was claimed (`config`, `tag`, or `name`).
+
+**It tells you if it failed.** After deleting, teardown re-runs discovery and
+**exits non-zero** if anything survives, so "clean" is checkable rather than
+assumed. Three resource types (KB data sources, gateway targets and Cedar
+policies) cannot be tagged — AWS gives them no ARN — so they are reached through
+their parents.
+
+Idempotent: every delete is best-effort, so re-running after a partial teardown
+just prints `skip` for what is already gone.
 
 ---
 
 ## Development
 
 ```bash
+make install  # do this once: uv pip install -e ".[dev]"
 make lint     # ruff check + format check
 make test     # pytest (no AWS calls)
 make fix      # auto-fix lint and format
 ```
+
+`make install` has to come first (step 1 of the setup above already does it).
+The other targets shell out to bare `uv run`, which does not install the
+package or the `dev` extra, so `make test` and `make lint` fail at collection
+in an environment where `make install` has never run. If you would rather not
+install anything, `uv run --extra dev pytest` and
+`uv run --extra dev ruff check .` work standalone.
 
 All the AWS details, quirks, and cost notes are in the source files.
 Start with `src/agentcore_demo/agent.py` for the orchestration logic,

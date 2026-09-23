@@ -21,7 +21,7 @@ reliability of a live run, and honest cost numbers.
 
 **The demo is built and works.** It was written 2026-05-20 → 06-12 and has been run
 live against the real account. Treat everything below as working code to be reviewed
-and adjusted, not scaffolding to be filled in. `ruff` is clean and 51 tests pass.
+and adjusted, not scaffolding to be filled in. `ruff` is clean and 88 tests pass.
 
 | file | role |
 |---|---|
@@ -106,13 +106,102 @@ Keep this protocol stable. If the page needs more, add a field; don't repurpose.
 - **Guardrail / Gateway**: `build_kb.py` also provisions a Bedrock Guardrail (used
   to intercept external links in model output and swap in the local corpus copy)
   and an AgentCore Gateway with a Cedar `ForbidWeb` policy for beat 4.
+- **The beat-4 tool is real** (verified 2026-09-22). `build_kb.create_gateway_target()`
+  creates an MCP-category **OpenAPI** target named `web-tools` whose inline schema
+  (`web_tools_openapi_schema()`) wraps the public ClinicalTrials.gov v2 API:
+  ```python
+  create_gateway_target(
+      gatewayIdentifier=gateway_id, name="web-tools",
+      targetConfiguration={"mcp": {"openApiSchema": {"inlinePayload": <json str>}}},
+  )   # credentialProviderConfigurations OMITTED -- see below
+  ```
+  Facts this rests on, all from current docs:
+  - Tool names are `${target_name}___${tool_name}`, three underscores
+    ([gateway-tool-naming](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-tool-naming.html)),
+    and for an OpenAPI target the tool half **is the `operationId`**
+    ([gateway-schema-openapi](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-schema-openapi.html):
+    "`operationId` … is used as the tool name"). Hence `web-tools___web_fetch`,
+    and the Cedar action `AgentCore::Action::"web-tools___web_fetch"`. Those
+    strings are one fact in three files — `build_kb.py`, `aws.py`, the Cedar
+    rule. Cedar matches the **prefixed** action, never `context.toolName`.
+  - `credentialProviderConfigurations` is **optional** (CreateGatewayTarget API
+    reference: "Required: No") and the outbound-auth matrix lists *No
+    authorization → Yes* for OpenAPI targets. ClinicalTrials.gov v2 is public, so
+    it is omitted. Do **not** substitute `GATEWAY_IAM_ROLE`: AWS states SigV4
+    outbound only works against services that verify SigV4 (API Gateway, Lambda
+    URLs, AgentCore Gateway) — clinicaltrials.gov does not.
+  - There is **no Lambda anywhere in this repo.** Earlier comments and a
+    `teardown.py` block implied an `inside-the-lines-web-tool` function; nothing
+    ever created it and both were removed on 2026-09-22.
+- **HTTP passthrough targets cannot serve beat 4** (verified 2026-09-22). They are
+  the obvious Lambda-free choice and they are wrong here. HTTP targets are a
+  *different category* from MCP targets: "unlike MCP targets, HTTP targets do not
+  support capability synchronization or semantic tool search. Clients address each
+  target individually through path-based routing"
+  ([gateway-targets-http](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-targets-http.html)).
+  A passthrough target is reached at
+  `https://{gatewayId}.gateway.bedrock-agentcore.{region}.amazonaws.com/{targetName}/{path}`,
+  never appears in `tools/list`, and is not callable via `tools/call` — so there is
+  no `web-tools___web_fetch` action name for `ForbidWeb` to match.
+  Separately, the pinned botocore (1.43.14) models `targetConfiguration.http` as a
+  union with only `agentcoreRuntime`; `passthrough` is not in the local model yet.
+- **`query_gateway()` has three outcomes, not two** (2026-09-22): `{"denied": True,
+  reason}` for a *recognised* Cedar denial only, `{"result": ...}` for a genuine
+  success, `{"error": True, reason}` for everything else. This exists because a
+  tool-not-found error carries none of the denial keywords and used to fall through
+  to the success branch — the "Cedar Policy Denied" badge would then silently not
+  appear on stage. `agent.py`'s `question_4` surfaces the `error` case through a
+  `phase` line and never fakes the badge. `backend.py`'s `query_gateway`
+  docstring documents all three outcomes.
+
+## Verified live 2026-09-22 (a full run against the real account)
+
+All four beats were run end to end. Total **$0.317**, and the things that had
+never actually been exercised are now exercised. Findings worth keeping:
+
+- **Cedar's action IS the prefixed MCP tool name.** The rule must read
+  `action == AgentCore::Action::"web-tools___web_fetch"`. It previously read
+  `action == "InvokeTool" ... when { context.toolName == "web_fetch" }`, which
+  **never matched**. That went unnoticed for months because no real gateway
+  target existed, so the call failed for unrelated reasons and the UI showed a
+  denial anyway. Once `web-tools` became a real OpenAPI target, beat 4 silently
+  *succeeded* — fetching live ClinicalTrials.gov data and demonstrating the
+  exact opposite of its own security point. A denial names the policy:
+  `Tool Execution Denied: ... [Policy evaluation denied due to ForbidWeb-xxxx]`.
+- **Adaptive thinking is on by default and is never displayed.** Opus 5 on Q3
+  took **108s** and ran output to the `8192` ceiling (truncating its review).
+  With `thinking: disabled` and a "be concise, 400 words" instruction shared by
+  both reviewers, Q3 went **141s → 48s** with no truncation. `thinking` is
+  Anthropic-only — sending it to Astra returns `unknown_parameter`.
+- **`content[0]["text"]` is wrong.** With thinking on, block 0 is
+  `reasoningContent`. Join every block that has a `text` key.
+- **botocore's 60s read timeout is too low.** Opus 5 raised `ReadTimeoutError`
+  mid-run. The `bedrock-runtime` client now sets `read_timeout=600`. Note this
+  is unrelated to `app.py`'s `asyncio.to_thread` — that keeps the *WebSocket*
+  responsive, not the HTTP read alive.
+- **GPT-6 Astra books prompt tokens as cache tokens.** `inputTokens` comes back
+  as ~2 while `cacheWriteInputTokens`/`cacheReadInputTokens` hold the real
+  count. Taken at face value it understated Q3 by ~$0.14. `converse()` now
+  falls back to the cache fields.
+- **AWS list responses are inconsistently keyed.** `ListPolicyEngines` →
+  `policyEngines`, `ListPolicies` → `policies`, `ListGateways` /
+  `ListGatewayTargets` → `items`. Two comments in this repo blamed "API bugs"
+  that were really the wrong key being read; `list_policies()` works fine.
+- **The gateway policy engine needs `bedrock-agentcore:*Authorize*`.** Without
+  it, `update_gateway()` fails and the Cedar beat cannot be wired up at all.
+- **Beat 4 was excluded by default.** `agent.run()`, `app.py::_run_agent` and
+  `run.py --questions` all defaulted to `(1, 2, 3)`.
+- **`run.py` and `app.py` built the backend differently** — `run.py` passed no
+  guardrail and no gateway, so `make demo-headless` verified *neither* security
+  beat. Both now go through `AwsBackend.from_config()`. Add backend wiring there,
+  never in the two entry points.
 
 ## Conventions
 
 - Python 3.11, `src/` layout, package is `agentcore_demo`.
 - **Always `uv`, never bare `pip`**: `uv pip install -e ".[dev]"`, `uv run ...`.
 - **`make install` first, once.** After that `make lint` and `make test` work
-  (51 tests). In a fresh checkout `make test` on its own fails at collection with
+  (88 tests). In a fresh checkout `make test` on its own fails at collection with
   `ModuleNotFoundError: No module named 'agentcore_demo'`, because `uv run pytest`
   doesn't install the package or the dev extra. If you'd rather not install,
   `uv run --extra dev pytest` works standalone.
@@ -147,8 +236,10 @@ supported at all. Do not "modernise" this onto Mantle or the Responses API.
 **Adaptive thinking is on by default** on Opus 5 and Sonnet 5, including when
 the request omits `thinking` — which `aws.py` does. Opus 4.7 behaved the
 opposite way, so the Sept 2026 bump turned thinking on silently. It raises
-latency and bills thinking as output tokens. Left on deliberately (it helps Q3);
-see the note in `aws.py` for how to disable it if rehearsal timing demands.
+latency and bills thinking as output tokens. It is left on for Q1/Q2 but
+**disabled for both Q3 reviewers** (`converse(..., thinking="disabled")`), which
+is what took Q3 from 141s to 48s. `thinking` is Anthropic-only — Astra rejects
+it with `unknown_parameter`.
 
 **Why not Claude Fable 5.1?** It is Anthropic's most capable widely released
 model, it is on Bedrock, it works in us-west-2 via `us.anthropic.claude-fable-5-1`,
@@ -164,6 +255,55 @@ and it supports Converse and Guardrails — so it would drop straight in, at
 3. Thinking cannot be disabled and it is built for multi-hour agentic jobs —
    wrong latency profile for a rehearsed five-minute demo.
 Revisit only with refusal handling in place and a rehearsal that proves timing.
+
+## Teardown must leave nothing behind (this is a public repo)
+
+The owner's requirement, verbatim: *"The setup and teardown have to be clean and
+not leave stuff in people's AWS accounts."* It previously was not. Teardown keyed
+**only** off the IDs and names in the current `config.py`, so every rename
+between a build and a teardown orphaned the previous generation. Real damage
+found on 2026-09-22 in one account: three S3 Vector buckets (each with an index),
+a Knowledge Base stuck in `DELETE_UNSUCCESSFUL` since June, two Cedar policy
+engines holding five policies, a guardrail `build_kb.py` could never adopt
+(it get-or-creates `inside-the-lines-url-filter`, the orphan was
+`inside-the-lines-guardrail-v3`), and two IAM roles.
+
+How it works now:
+
+- **Everything `build_kb.py` creates is tagged `Project=inside-the-lines`**, at
+  create *and* re-applied on every get-or-create "exists" branch, so resources
+  made by an older untagged version get adopted rather than stay invisible.
+- **Teardown discovers rather than assumes.** One `discover()` feeds plan,
+  delete and verify — so a category the sweep can't see is one verify can't see
+  either. Each item is claimed by `config`, `tag`, or **normalised** name
+  (lowercased, punctuation stripped — load-bearing, because the policy engine is
+  `InsideTheLinesEngine` and shares no literal prefix with anything else).
+- **`--dry-run`** lists everything with its provenance and changes nothing. This
+  is the "is my account clean?" check; `make teardown-dry-run`.
+- **`verify()` runs after deletion and `main()` exits non-zero** if anything
+  survives (retried 6×10s so in-flight `DELETING` resources don't false-positive).
+- **`dataDeletionPolicy=RETAIN` before `delete_knowledge_base`.** This is what
+  unstuck the June zombie: a KB whose vector store is already gone can otherwise
+  never finish deleting. `update_data_source` is a **full replacement** — echo
+  `name`, `dataSourceConfiguration` and `vectorIngestionConfiguration` back or it
+  returns `ValidationException: chunkingConfiguration cannot be updated`.
+  Delete the KB **before** its index, or you recreate the zombie.
+- **`bedrock` alone spells it `resourceARN`** (capital ARN) and returns tags as a
+  **list** of `{key,value}`; `bedrock-agent`, `bedrock-agentcore-control` and
+  `s3vectors` use `resourceArn` and return a map. A generic wrapper that guessed
+  `resourceArn` silently swallowed the `ParamValidationError` and reported "the
+  guardrail simply isn't tagged" — the most dangerous way for a sweep to fail.
+- **Three things cannot be tagged**, because AWS gives them no ARN: KB data
+  sources, gateway targets, and Cedar policies. They are reached through their
+  parents. Don't "fix" this by inventing an ARN.
+- The S3 corpus bucket is the only resource whose name the project doesn't
+  control, so it is also found via the Resource Groups Tagging API.
+
+**Still unverified:** no tag has yet been applied to a live resource, and no
+real deletion has run through this code path. The cheapest closing check is
+`python build_kb.py` on an already-provisioned account (idempotent; the adopt
+branches stamp the tags) then `make teardown-dry-run` — every line should read
+`[config, tag, name]`.
 
 ## Guardrails — do not violate
 
@@ -191,13 +331,19 @@ Revisit only with refusal handling in place and a rehearsal that proves timing.
 3. *A second opinion* — Claude Opus **and** OpenAI GPT-6 Astra read the evidence
    independently; Sonnet adjudicates where the two model families disagree.
    Astra replaced Amazon Nova Pro in Sept 2026 once OpenAI models reached Bedrock;
-   both reviewers get the same 8192-token budget so the comparison is not rigged.
+   both reviewers get the same 4096-token budget so the comparison is not rigged.
    Astra ($11/$55 per 1M, `us.` Geo) is the priciest model here — Q3 dominates
    the receipt, which is honest and worth saying out loud. See **Models** above
    for the full table and for why Claude Fable 5.1 is deliberately not used.
 4. *Secure by policy* — the agent tries to reach ClinicalTrials.gov through the
    AgentCore Gateway; a Cedar `ForbidWeb` policy denies it, and the agent falls
    back to the knowledge base.
+   **The tool it tries to call is real**: `web-tools` is an OpenAPI gateway target
+   over the live ClinicalTrials.gov v2 API, publishing `web_fetch`. Lift the
+   policy and the call genuinely fetches trials. That is the whole claim of the
+   beat — the *policy* is what stops it, not the absence of a tool — so do not
+   "simplify" the target away. See **Verified AWS facts** for the API shape and
+   for why an HTTP passthrough target cannot be used instead.
 
 Then the receipt: a total well under a dollar, billed only for what ran.
 "Run complete" belongs **after Q4**, not after Q3.

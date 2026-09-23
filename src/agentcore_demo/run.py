@@ -9,7 +9,8 @@ Why use this instead of the web app?
     a browser.  If something is misconfigured (wrong KB ID, missing model
     access), you'll see the error immediately in the terminal.
   - To run a single question cheaply during development: `--questions 1`
-    runs Q1 only (Claude Haiku, a few cents) without the full three-question run.
+    runs Q1 only (Claude Haiku, a cent or two) instead of the full
+    four-question run (~$0.32).
   - To check the receipt total before committing to the full demo.
 
 Headless mode means no WebSocket, no browser -- just the same event stream
@@ -18,13 +19,20 @@ event protocol is identical to the WebSocket version, so a passing headless
 run confirms the web app will also work.
 
 Usage:
-    python -m agentcore_demo.run                # run Q1, Q2, Q3
+    python -m agentcore_demo.run                # run Q1, Q2, Q3, Q4
     python -m agentcore_demo.run --questions 1  # Q1 only
     python -m agentcore_demo.run --questions 1,3  # Q1 and Q3
     python -m agentcore_demo.run --questions 4  # Q4 only (Cedar policy demo)
 
     DEMO_FAKE=1 python -m agentcore_demo.run    # fake backend (no AWS, no cost)
     make demo-headless                          # same as the default run
+
+What this renderer does NOT show:
+  _emit_to_terminal() has no branch for the `guardrail` or `policy_denied`
+  events, so beat 1's link interception and beat 4's Cedar badge are invisible
+  here.  Q4's denial still shows up, but as the `phase` line "web access denied
+  by Cedar policy — answering from knowledge base".  Use the web app if you want
+  to see the badges themselves.
 """
 
 from __future__ import annotations
@@ -43,9 +51,9 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--questions",
-        default="1,2,3",
+        default="1,2,3,4",
         metavar="N[,N]",
-        help="Comma-separated question numbers to run (default: 1,2,3).",
+        help="Comma-separated question numbers to run (default: 1,2,3,4).",
     )
     return p.parse_args()
 
@@ -81,14 +89,7 @@ def _build() -> tuple:
     from agentcore_demo.pricing import fetch_rates  # noqa: PLC0415
 
     rates = fetch_rates(config.REGION)
-    backend = AwsBackend(
-        config.REGION,
-        config.KB_ID,
-        config.DATA_SOURCE_ID,
-        config.MODELS,
-        rates=rates,
-        vector_bucket_name=getattr(config, "VECTOR_BUCKET_NAME", ""),
-    )
+    backend = AwsBackend.from_config(config, rates)
     meter = CostMeter(
         pricing=config.PRICING,
         ci_per_second=config.CODE_INTERPRETER_PER_SECOND,
@@ -190,6 +191,25 @@ def _emit_to_terminal(ev: dict) -> None:  # noqa: C901  (switch-like structure, 
         # Running total is emitted after every model call; suppress here
         # since each model row already shows its own cost.
         pass
+
+    elif t == "guardrail":
+        # Added 2026-09-22.  These two branches were MISSING, which meant
+        # `make demo-headless` -- the command the README offers for pre-talk
+        # verification -- could not show either security beat.  You could run
+        # the whole demo headless, see it "pass", and learn nothing about
+        # whether the Bedrock Guardrail or the Cedar policy actually fired.
+        # Plain text with glyphs, matching the rest of this renderer (no ANSI).
+        actions = ev.get("actions") or []
+        print(f"  ◇ Bedrock Guardrail intercepted {len(actions)} link(s)")
+        for a in actions:
+            replacement = a.get("local") or a.get("reason") or "removed"
+            print(f"      {a.get('original', '?')}  ->  {replacement}")
+
+    elif t == "policy_denied":
+        # The whole point of beat 4.  Its ABSENCE is the failure mode that
+        # matters, so print it unmissably rather than as a dim aside.
+        print(f"  ■ Cedar policy DENIED {ev.get('tool', '?')}")
+        print(f"      {ev.get('reason', '')}")
 
     elif t == "receipt":
         # Final itemised receipt -- same data the browser renders as a table.

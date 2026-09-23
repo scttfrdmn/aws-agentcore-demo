@@ -515,7 +515,7 @@
 
     <!-- ingest card: shown when KB is being built -->
     <div class="ingest-card" x-show="ingestStarted">
-      <div class="ingest-heading">Building Knowledge Base · 657 PCSK9 papers · S3 Vectors · Titan Embed v2</div>
+      <div class="ingest-heading">Building Knowledge Base · <span x-text="ingestTotal || 1000"></span> PCSK9 papers · S3 Vectors · Titan Embed v2</div>
       <div class="ingest-count">
         <span x-text="ingestIndexed.toLocaleString()"></span>
         <span class="denom"> of ~<span x-text="ingestTotal.toLocaleString()"></span> papers</span>
@@ -652,11 +652,11 @@
         </div>
       </template>
 
-      <!-- done banner only after all three canned questions complete -->
-      <div class="done-banner" x-show="allThreeDone">✓ Run complete</div>
+      <!-- done banner only after all FOUR canned questions complete -->
+      <div class="done-banner" x-show="allBeatsDone">✓ Run complete</div>
 
-      <!-- total receipt after all three done — accumulates all question rows -->
-      <template x-if="allThreeDone">
+      <!-- total receipt after all four done — accumulates all question rows -->
+      <template x-if="allBeatsDone">
         <div class="receipt-card" style="margin-top:0.5rem">
           <h2>Total Receipt</h2>
           <table class="receipt-table">
@@ -790,8 +790,10 @@ function demo() {
     _userScrolled: false,
     _baseTotal:    0,    // accumulated total from completed questions
 
-    get allThreeDone() {
-      // "Run complete" fires after all four canned questions are answered
+    get allBeatsDone() {
+      // "Run complete" fires after all FOUR canned questions are answered.
+      // Renamed from allThreeDone on 2026-09-22: the logic already required 4
+      // (beat 4 is the Cedar policy demo), only the name still said three.
       return this.canned.length === 4 && this.canned.every(c => c.fired)
           && this._doneMsgIds.size >= 4;
     },
@@ -1029,7 +1031,7 @@ function demo() {
 
         case 'done':
           this._doneMsgIds.add(msgId);
-          this.statusLine = this.allThreeDone ? 'done' : 'ready';
+          this.statusLine = this.allBeatsDone ? 'done' : 'ready';
           break;
       }
     },

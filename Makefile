@@ -1,4 +1,4 @@
-.PHONY: install lint fix test corpus build-kb demo demo-fake demo-fake-ingest demo-headless teardown
+.PHONY: install lint fix test corpus build-kb demo demo-fake demo-fake-ingest demo-headless teardown teardown-dry-run
 
 install:    ## install the package + dev tools
 	uv pip install -e ".[dev]"
@@ -32,5 +32,8 @@ demo-fake-ingest:  ## run demo with fake backend starting in not-ready (ingestio
 demo-headless:  ## run all questions headless against real AWS (requires config.py)
 	uv run python -m agentcore_demo.run
 
-teardown:   ## delete all billable AWS resources
+teardown-dry-run:  ## list what teardown WOULD delete, change nothing
+	uv run python teardown.py --dry-run
+
+teardown:   ## delete all billable AWS resources (exits non-zero if any survive)
 	uv run python teardown.py

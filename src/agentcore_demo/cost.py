@@ -64,7 +64,9 @@ class CostMeter:
     """
 
     # tier -> (usd_per_1M_in, usd_per_1M_out)
-    # Example: {"haiku": (1.00, 5.00), "sonnet": (3.00, 15.00), ...}
+    # In production this is config.PRICING, i.e. as of 2026-09-22:
+    #   {"haiku": (1.00, 5.00), "sonnet": (2.00, 10.00),
+    #    "opus": (5.00, 25.00), "openai": (11.00, 55.00)}
     pricing: dict[str, tuple[float, float]]
 
     # AgentCore Code Interpreter rate in USD per wall-clock second.
@@ -135,8 +137,11 @@ class CostMeter:
         """Record KB retrieval API calls.
 
         Cost = (n_queries / 1,000) × kb_query_usd_per_1k.
-        For a single retrieve() call, n_queries=1 and the cost is a
-        fraction of a cent (at $0.40/1K, one call costs $0.0004).
+        For a single retrieve() call, n_queries=1.  At the real S3 Vectors rate
+        of $0.0025 per 1,000 QueryVectors requests ($2.50 per million) that is
+        $0.0000025 -- a rounding error next to the model calls, and deliberately
+        so.  (Until 2026-09-22 this rate was configured as $0.40 per 1,000,
+        ~160x too high, which made every retrieval row read $0.000400.)
 
         Args:
             step: receipt label (e.g. "Q1  retrieval").

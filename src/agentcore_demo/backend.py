@@ -59,7 +59,12 @@ class Backend(Protocol):
         ...
 
     def converse(
-        self, tier: str, system: str, prompt: str, max_tokens: int = 1600
+        self,
+        tier: str,
+        system: str,
+        prompt: str,
+        max_tokens: int = 1600,
+        thinking: str | None = None,
     ) -> tuple[str, dict, list[dict]]:
         """Invoke a Bedrock foundation model and return its response.
 
@@ -68,6 +73,8 @@ class Backend(Protocol):
 
         Args:
             tier: model tier key, e.g. "haiku", "sonnet", "opus", "openai".
+            thinking: None leaves the model's default (adaptive thinking is ON
+                by default on Claude 5 models); "disabled" turns it off.
             system: the system prompt text.
             prompt: the user message text.
             max_tokens: maximum number of output tokens.
@@ -149,9 +156,18 @@ class Backend(Protocol):
             tool_name: the short tool name (without the target prefix).
             arguments: tool arguments dict (e.g. {"url": "https://..."}).
 
-        Returns:
-            {"result": response_body}  on success, or
-            {"denied": True, "reason": "..."}  if the Cedar policy denied
-            the call or no gateway URL is configured.
+        Returns exactly one of THREE shapes -- the third exists so beat 4 can
+        never silently succeed, and never fake its own badge:
+            {"result": response_body}
+                the tool ran and returned data.
+            {"denied": True, "reason": "..."}
+                a Cedar policy denied the call, or no gateway is configured.
+                Only a message that is recognisably a policy denial may
+                claim this (see aws.py :: _is_policy_denial).
+            {"error": True, "reason": "..."}
+                anything else -- transport failure, unparseable body, a bare
+                HTTP 403 (far more likely a missing InvokeGateway permission
+                than a policy decision), or an MCP result.isError.  The UI
+                shows this as a visible failure rather than a denial.
         """
         ...

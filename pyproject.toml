@@ -8,8 +8,14 @@ version = "0.1.0"
 description = "Inside the Lines -- a live demo of biomedical-research agents inside a secure boundary on AWS Bedrock + AgentCore."
 requires-python = ">=3.11"
 dependencies = [
+    # boto3 is a floor only: it is additive/backward-compatible across minors and
+    # new AWS services (s3vectors, bedrock-agentcore-control) arrive by upgrading.
     "boto3>=1.40.0",
-    "bedrock-agentcore>=0.1.0",
+    # Upper bound is deliberate: we call the CodeInterpreter client directly
+    # (aws.py code_interpreter_run -> start/invoke/stop), which is not a stable
+    # public API.  A 2.x could rename it and only fail live, on stage.
+    # tests/test_sdk_contract.py is the drift detector for that surface.
+    "bedrock-agentcore>=1.11,<2",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "requests>=2.31.0",

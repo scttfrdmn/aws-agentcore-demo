@@ -13,7 +13,7 @@ def test_run_emits_a_well_formed_stream(backend, meter):
     types = [e["type"] for e in events]
     assert types[-1] == "done"
     assert "receipt" in types
-    assert types.count("question") == 3
+    assert types.count("question") == 4  # four beats since 2026-09-22
 
     receipt = next(e for e in events if e["type"] == "receipt")
     assert receipt["total"] == round(sum(r["usd"] for r in receipt["rows"]), 6)
@@ -155,7 +155,9 @@ def test_receipt_contains_retrieval_rows(backend, meter):
 
     receipt = next(e for e in events if e["type"] == "receipt")
     retrieval_rows = [r for r in receipt["rows"] if r["label"] == "KB retrieval"]
-    assert len(retrieval_rows) == 3
+    # Four: Q1-Q4 each retrieve.  Q4 retrieves too, because its Cedar denial
+    # falls back to the knowledge base.
+    assert len(retrieval_rows) == 4
 
 
 def test_receipt_rows_have_no_estimated_field(backend, meter):
@@ -280,3 +282,21 @@ def test_q4_emits_policy_denied_event(backend, meter):
 
     assert any(e["type"] == "answer" for e in events)
     assert events[-1]["type"] == "done"
+
+
+def test_q4_visible_error_when_gateway_fails_not_a_fake_denial(backend, meter):
+    """A broken gateway must surface an error, never a fake "Cedar denied" badge.
+
+    This is the branch that exists so beat 4 cannot silently succeed or claim a
+    policy denial it did not get.  Before the Sept 2026 fix an unrecognised
+    gateway response fell through as a success, so the rehearsed badge would
+    quietly not appear on stage.  Drive it from the fake so it stays covered.
+    """
+    backend.gateway_outcome = "error"
+    events: list[dict] = []
+    Agent(backend, meter, events.append).run(which=(4,))
+
+    # No policy_denied event, because no policy denial actually happened.
+    assert not [e for e in events if e["type"] == "policy_denied"]
+    # The run still completes and still answers from the knowledge base.
+    assert any(e["type"] == "answer" for e in events)

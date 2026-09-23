@@ -132,17 +132,7 @@ def _build_backend() -> Backend:
     # fetch_rates() calls the AWS Price List API once and caches the result.
     # Takes 1-3 seconds on first call; subsequent calls return the cached value.
     rates = fetch_rates(config.REGION)
-    return AwsBackend(
-        config.REGION,
-        config.KB_ID,
-        config.DATA_SOURCE_ID,
-        config.MODELS,
-        rates=rates,
-        vector_bucket_name=getattr(config, "VECTOR_BUCKET_NAME", ""),
-        guardrail_id=getattr(config, "GUARDRAIL_ID", ""),
-        guardrail_version=getattr(config, "GUARDRAIL_VERSION", "DRAFT"),
-        gateway_url=getattr(config, "GATEWAY_URL", ""),
-    )
+    return AwsBackend.from_config(config, rates)
 
 
 def _build_meter() -> CostMeter:
@@ -344,7 +334,7 @@ async def websocket_run(
     Query parameters:
       q=1|2|3|4   run one of the four canned questions.
       text=...    run a free-form question (routed via Haiku).
-      (neither)   run all three main canned questions (Q1, Q2, Q3).
+      (neither)   run all four canned questions (Q1, Q2, Q3, Q4).
 
     The agent runs in a thread pool (asyncio.to_thread) so the blocking
     Bedrock API calls don't stall the async event loop.
@@ -376,7 +366,7 @@ async def websocket_run(
         if text:
             await asyncio.to_thread(_run_freeform, backend, meter, emit, stop_event, text)
         else:
-            which = (q,) if q is not None else (1, 2, 3)
+            which = (q,) if q is not None else (1, 2, 3, 4)
             await asyncio.to_thread(_run_agent, backend, meter, emit, stop_event, which)
     except WebSocketDisconnect:
         stop_event.set()  # signal the agent thread to stop emitting
@@ -391,7 +381,7 @@ def _run_agent(
     meter: CostMeter,
     emit,
     stop_event: threading.Event,
-    which: tuple[int, ...] = (1, 2, 3),
+    which: tuple[int, ...] = (1, 2, 3, 4),
 ) -> None:
     """Run canned questions through the Agent.  Called in a thread pool."""
 
