@@ -378,12 +378,17 @@
       display: flex; gap: 5px; align-items: center;
       padding: 0.5rem 0.25rem;
     }
-    .thinking-dot span {
+    /* Scoped to .dot, NOT to `span` (fixed 2026-09-22).  It used to read
+       `.thinking-dot span`, which also matched the .thinking-note caption below
+       and gave it width:7px -- so the caption wrapped to one word per line and
+       overflowed the bubble onto the chips. */
+    .thinking-dot .dot {
       width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
+      flex: 0 0 auto;
       animation: thinkBounce 1.2s ease-in-out infinite;
     }
-    .thinking-dot span:nth-child(2) { animation-delay: 0.2s; }
-    .thinking-dot span:nth-child(3) { animation-delay: 0.4s; }
+    .thinking-dot .dot:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-dot .dot:nth-child(3) { animation-delay: 0.4s; }
     /* Caption beside the dots.  The dots alone made the audience ask "what is it
        doing?" -- and the honest answer is "not AI yet".  Every string this can
        show corresponds to a real milestone the browser has actually reached; we
@@ -391,6 +396,13 @@
     .thinking-note {
       margin-left: 0.6rem; font-size: 0.78rem; color: var(--muted);
       font-family: "Atkinson Hyperlegible Mono", "Menlo", monospace;
+      /* Explicit, because this sits inside a flex row of fixed-size dots:
+         never inherit their width, never wrap, never animate. */
+      width: auto; height: auto; flex: 0 1 auto; min-width: 0;
+      white-space: nowrap; border-radius: 0; background: none; animation: none;
+      /* If the window is narrow enough that the caption will not fit, truncate
+         rather than overflow the bubble -- it is a transient placeholder. */
+      overflow: hidden; text-overflow: ellipsis;
     }
     @keyframes thinkBounce {
       0%,60%,100% { transform: translateY(0);    opacity: 0.4; }
@@ -557,7 +569,7 @@
 
             <!-- thinking placeholder: shown immediately, disappears once real content arrives -->
             <div class="thinking-dot" x-show="!msg.phases.length && !msg.models.length && !msg.answer && !msg.routeLabel">
-              <span></span><span></span><span></span>
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
               <span class="thinking-note" x-text="msg.wsNote"></span>
             </div>
 
