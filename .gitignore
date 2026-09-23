@@ -1,4 +1,7 @@
 config.py
+# The backup bootstrap.write_config() takes before it edits config.py.  It holds
+# the same real account ID / resource IDs, so it must never be committed either.
+config.py.bak
 corpus/
 chart.png
 .env

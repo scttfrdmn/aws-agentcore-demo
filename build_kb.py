@@ -3,16 +3,27 @@
 build_kb.py  --  one-time, fully scripted Knowledge Base provisioning.
 
 Run this script ONCE before the talk to create every AWS resource the demo
-needs. When it finishes, it prints a block of IDs to copy into config.py.
+needs.  It asks you for nothing and it leaves you nothing to edit: when it
+finishes it WRITES the resulting IDs straight into config.py (backing the file up
+first) and prints them so you can see what changed.
+
+Nothing here needs config.py to exist beforehand either.  The first thing this
+module does is bootstrap.ensure_config(), which generates config.py from the
+tracked config.example.py, fills ACCOUNT_ID from STS and derives a
+globally-unique BUCKET name -- so `git clone && make build-kb` works.
 
 Everything it creates is tagged Project=inside-the-lines (see PROJECT_TAGS
 below).  That tag is what lets teardown.py find resources config.py no longer
 names -- read the comment above PROJECT_TAG_KEY for the orphan story it prevents.
 
 What this script creates (in order):
-  1. Tag on the S3 corpus bucket  -- the one resource here this script does not
-                  create.  Tagged so teardown can still find it if you rename
-                  config.BUCKET.
+  1. S3 corpus bucket + the corpus in it  -- created if absent (idempotently,
+                  and with the us-east-1 LocationConstraint special case
+                  handled), tagged so teardown can find it after a rename, and
+                  filled from the local corpus/ directory by a parallel,
+                  resumable upload.  This step used to be three manual actions
+                  in the README: invent a unique bucket name, create it, and
+                  `aws s3 sync` into it.
   2. IAM role  -- a service role that Bedrock assumes to read S3 and write
                   to the vector store on your behalf.
   3. S3 Vectors bucket + index  -- the serverless vector store.  No hourly
@@ -78,7 +89,19 @@ import time
 
 import boto3
 
-import config as cfg
+import bootstrap
+
+# ORDER IS LOAD-BEARING.  ensure_config() is what CREATES config.py on a fresh
+# clone (from the tracked config.example.py, with ACCOUNT_ID from STS and a
+# derived BUCKET), so it has to run before `import config` can possibly succeed.
+# Without this line a stranger's first `make build-kb` ends in
+# `ModuleNotFoundError: No module named 'config'` -- a traceback instead of an
+# instruction.  It is idempotent: on an existing config.py it fills only values
+# that are blank or still the shipped placeholder, and never overwrites a real
+# one.
+bootstrap.ensure_config()
+
+import config as cfg  # noqa: E402 -- must follow ensure_config(); see above
 
 # All three clients share the region from config.py.
 iam = boto3.client("iam")
@@ -88,10 +111,11 @@ agent = boto3.client("bedrock-agent", region_name=cfg.REGION)
 # tests/test_sdk_contract.py so a rename fails CI rather than the live demo.
 s3v = boto3.client("s3vectors", region_name=cfg.REGION)
 
-# Used only by tag_corpus_bucket(); this script never creates an S3
-# general-purpose bucket (you make the corpus bucket yourself and `aws s3 sync`
-# into it -- see corpus_fetch.py).
-s3 = boto3.client("s3")
+# Used by ensure_corpus_bucket() -- create, tag, and fill the corpus bucket.
+# Pinned to cfg.REGION on purpose: create_bucket's LocationConstraint and the
+# client's own region have to agree, and the KB pays cross-Region transfer on
+# ingestion if the corpus lands anywhere other than the KB's region.
+s3 = boto3.client("s3", region_name=cfg.REGION)
 
 
 # ----------------------------------------------------------------------
@@ -467,10 +491,9 @@ def ingest(kb_id: str, ds_id: str) -> None:
                 raise RuntimeError(
                     f"Ingestion reported COMPLETE but indexed {indexed} documents. "
                     f"The knowledge base is EMPTY and the demo will retrieve nothing.\n"
-                    f"Most likely s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} has no objects "
-                    f"-- run `make corpus`, then upload it:\n"
-                    f"  aws s3 sync corpus/ s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} "
-                    f"--region {cfg.REGION}"
+                    f"Most likely s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} has no "
+                    f"objects. Run `make corpus` to download the papers, then "
+                    f"`make build-kb` again -- step 1 uploads them for you."
                 )
             break
 
@@ -486,9 +509,9 @@ def ingest(kb_id: str, ds_id: str) -> None:
             raise RuntimeError(
                 "Ingestion job FAILED -- the knowledge base is empty.\n  "
                 + "\n  ".join(str(r) for r in reasons)
-                + f"\nCheck that s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} exists and "
-                f"contains the corpus (`aws s3 sync corpus/ "
-                f"s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} --region {cfg.REGION}`)."
+                + f"\nCheck that s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} contains "
+                f"the corpus. Run `make corpus` (downloads the papers) then "
+                f"`make build-kb` (step 1 uploads them) to repair it."
             )
 
         time.sleep(15)
@@ -1201,12 +1224,35 @@ def create_gateway() -> dict:
     return {"gateway_id": gateway_id, "gateway_url": gateway_url, "engine_id": engine_id}
 
 
+def ensure_corpus_bucket() -> None:
+    """Create the corpus bucket, tag it, and upload the corpus into it.
+
+    Three things that used to be the reader's problem, in the order they must
+    happen.  All three are idempotent, so this is cheap on a re-run:
+
+      1. CREATE the bucket.  cfg.BUCKET is derived as
+         "inside-the-lines-pcsk9-<account-id>" by bootstrap.ensure_config(), which
+         is globally unique by construction -- no inventing a name that turns out
+         to be taken.  bootstrap.ensure_bucket() handles the create_bucket
+         us-east-1/everywhere-else asymmetry; read its docstring before touching
+         it.
+      2. TAG it, so teardown.py can still find it after a rename (below).
+      3. UPLOAD corpus/ into it, in parallel, skipping what is already there.
+         This is deliberately here and not in corpus_fetch.py -- see the long
+         comment above bootstrap.upload_corpus() for why.
+
+    The upload must happen BEFORE the ingestion job in step 5, or the job
+    "succeeds" against an empty prefix and leaves an empty knowledge base.
+    """
+    bootstrap.ensure_bucket(cfg.BUCKET, cfg.REGION, s3)
+    tag_corpus_bucket()
+    bootstrap.upload_corpus(cfg.BUCKET, cfg.CORPUS_PREFIX, s3=s3, region=cfg.REGION)
+
+
 def tag_corpus_bucket() -> None:
     """Stamp the project tag on the S3 corpus bucket named by config.BUCKET.
 
-    This script does NOT create that bucket -- you make it yourself and
-    ``aws s3 sync ./corpus s3://<bucket>/corpus/`` into it (see corpus_fetch.py).
-    We tag it anyway, because it is the one resource teardown.py deletes whose
+    We tag it because it is the one resource teardown.py deletes whose
     name it cannot guess: cfg.KB_NAME, the vector bucket, the guardrail, the
     gateway and the roles all start with "inside-the-lines", but the corpus
     bucket name is yours to choose.  Without a tag, renaming BUCKET between a
@@ -1244,8 +1290,11 @@ def estimate_ingestion_cost() -> None:
     token count at 4 chars/token (a rough but consistent heuristic for
     English biomedical text).
 
-    The printed value should be pasted into config.py as
-    INGESTION_COST_ESTIMATE so the UI can display it alongside run costs.
+    Informational only -- nothing to copy anywhere.  The live UI computes the
+    same figure itself from the corpus size (pricing.py / the `setup_cost`
+    event), and labels it as COMPUTED rather than metered, which is the honest
+    description: Bedrock does not bill an itemised "ingestion" line.
+    Printing it here is so you see roughly what this one-time step cost.
 
     If corpus/ is not present (e.g. you ran this on a different machine
     than the one that ran corpus_fetch.py), the estimate is skipped.
@@ -1268,9 +1317,15 @@ def estimate_ingestion_cost() -> None:
     print(f"    INGESTION_COST_ESTIMATE = {usd:.4f}  # USD, paste into config.py")
 
 
-if __name__ == "__main__":
-    print("1/7  tag the corpus bucket")
-    tag_corpus_bucket()
+def main() -> None:
+    """Provision everything, then write the resulting IDs into config.py.
+
+    Wrapped in a function (rather than sitting under `if __name__`) so that
+    start.py -- the single `make start` entry point -- can call it directly
+    instead of shelling out to another interpreter.
+    """
+    print("1/7  corpus bucket: create, tag, upload")
+    ensure_corpus_bucket()
 
     print("2/7  IAM role")
     role_arn = create_kb_role()
@@ -1309,12 +1364,33 @@ if __name__ == "__main__":
     print("7/7  AgentCore Gateway + Cedar policy engine")
     gw = create_gateway()
 
-    print("\nDone. Paste these into config.py:")
-    print(f'  KB_ID = "{kb_id}"')
-    print(f'  DATA_SOURCE_ID = "{ds_id}"')
-    print(f'  GUARDRAIL_ID = "{guardrail_id}"')
-    print(f'  GUARDRAIL_VERSION = "{guardrail_version}"')
-    print(f'  GATEWAY_ID = "{gw["gateway_id"]}"')
-    print(f'  GATEWAY_URL = "{gw["gateway_url"]}"')
-    print(f'  GATEWAY_ENGINE_ID = "{gw["engine_id"]}"')
-    print("\nRun teardown.py after the talk.")
+    # These seven values used to be printed under "Done. Paste these into
+    # config.py:" and hand-copied.  Seven hand-edits is seven chances to put a
+    # gateway URL on the KB_ID line and then debug it live on stage, so they are
+    # now written back for you.  bootstrap.write_config():
+    #   - rewrites ONLY these exact top-level `NAME = "string"` lines, so every
+    #     comment and every other setting in the file survives untouched
+    #   - parses the result and reads the values back BEFORE writing anything
+    #   - copies config.py to config.py.bak first, and says so
+    #   - writes nothing at all if the values are already correct, so running
+    #     this script twice cannot duplicate a line
+    # It still PRINTS everything it wrote: the transcription step is gone, the
+    # visibility is not.
+    print("\nWriting the resolved IDs into config.py")
+    bootstrap.write_config(
+        {
+            "KB_ID": kb_id,
+            "DATA_SOURCE_ID": ds_id,
+            "GUARDRAIL_ID": guardrail_id,
+            "GUARDRAIL_VERSION": guardrail_version,
+            "GATEWAY_ID": gw["gateway_id"],
+            "GATEWAY_URL": gw["gateway_url"],
+            "GATEWAY_ENGINE_ID": gw["engine_id"],
+        }
+    )
+    print("\nDone -- nothing left to edit. `make demo` will run the demo.")
+    print("Run `make teardown` after the talk (or leave it: ~1.3 cents a month).")
+
+
+if __name__ == "__main__":
+    main()

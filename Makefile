@@ -1,4 +1,19 @@
-.PHONY: install lint fix test corpus build-kb demo demo-fake demo-fake-ingest demo-headless teardown teardown-dry-run
+.PHONY: start plan preflight install lint fix test corpus build-kb demo demo-fake demo-fake-ingest demo-headless teardown teardown-dry-run
+
+# `make start` is THE entry point.  From a fresh `git clone` it generates
+# config.py, runs read-only preflight checks, fetches the corpus, provisions
+# every AWS resource, writes the resulting IDs back into config.py and opens the
+# demo -- with nothing for the operator to look up, invent, upload or paste.
+# Safe to re-run at any time: every step skips itself when it is already done.
+# The granular targets below all still work for anyone who wants them.
+start:      ## ONE COMMAND: set up everything and run the demo (resumable)
+	uv run python start.py
+
+plan:       ## show what `make start` would do, and what it costs. Changes nothing
+	uv run python start.py --dry-run
+
+preflight:  ## read-only checks: credentials, region, models, permissions. Free
+	uv run python preflight.py
 
 install:    ## install the package + dev tools
 	uv pip install -e ".[dev]"
@@ -14,10 +29,10 @@ fix:        ## auto-fix lint + format
 test:       ## run the test suite (no AWS calls; works without `make install`)
 	uv run --extra dev pytest
 
-corpus:     ## fetch the PMC paper corpus (one-time)
+corpus:     ## fetch the PMC paper corpus (one-time, free, resumable)
 	uv run python corpus_fetch.py
 
-build-kb:   ## provision the Bedrock Knowledge Base (one-time)
+build-kb:   ## create the bucket, upload the corpus, provision the KB, write config.py
 	uv run python build_kb.py
 
 demo:       ## run the live web app (requires config.py)

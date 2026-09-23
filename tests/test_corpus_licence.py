@@ -18,6 +18,7 @@ No network, no AWS: these run against the pure function.
 
 import pytest
 
+import corpus_fetch
 from corpus_fetch import COMMERCIAL_LICENCES, classify_licence
 
 # (licence blob as it appears in PMC XML, expected classification).
@@ -80,3 +81,57 @@ def test_commercial_licences_is_narrower_than_pmc_allows():
     does not "fix" the set to match PMC and widen the corpus by surprise.
     """
     assert sorted(COMMERCIAL_LICENCES) == ["CC BY", "CC0"]
+
+
+# ----------------------------------------------------------------------
+# Resumption -- the other reason this step can waste a stranger's afternoon
+# ----------------------------------------------------------------------
+# Fetching the corpus is the slowest thing in the whole setup (10-15 minutes,
+# ~1,800 rate-limited NCBI calls).  `make start` re-runs the entire chain, so it
+# MUST be able to tell "already done" from "not started" without going to the
+# network.  These tests pin that, because a regression here means every re-run
+# spends a quarter of an hour redownloading files that are already on disk.
+def test_existing_ids_reads_the_directory(tmp_path):
+    (tmp_path / "PMC111.txt").write_text("body")
+    (tmp_path / "PMC222.txt").write_text("body")
+    assert corpus_fetch.existing_ids(tmp_path) == {"111", "222"}
+
+
+def test_existing_ids_ignores_junk_and_empty_files(tmp_path):
+    (tmp_path / "PMC111.txt").write_text("body")
+    (tmp_path / "PMC999.txt").write_text("")  # a truncated/interrupted download
+    (tmp_path / "notes.md").write_text("body")
+    (tmp_path / "PMC333.json").write_text("body")
+    assert corpus_fetch.existing_ids(tmp_path) == {"111"}
+
+
+def test_existing_ids_on_a_missing_directory_is_empty(tmp_path):
+    assert corpus_fetch.existing_ids(tmp_path / "nope") == set()
+
+
+def test_is_complete_is_false_when_partial(tmp_path):
+    (tmp_path / "PMC1.txt").write_text("body")
+    assert corpus_fetch.is_complete(tmp_path, target=3) is False
+
+
+def test_is_complete_is_true_at_target(tmp_path):
+    for i in range(3):
+        (tmp_path / f"PMC{i}.txt").write_text("body")
+    assert corpus_fetch.is_complete(tmp_path, target=3) is True
+
+
+def test_main_does_nothing_when_the_corpus_is_complete(tmp_path, monkeypatch, capsys):
+    """A complete corpus must short-circuit BEFORE any network call.
+
+    search_pmc is replaced with a function that fails the test if it is reached,
+    which is the only way to prove "no network" rather than assume it.
+    """
+    monkeypatch.setattr(corpus_fetch, "TARGET", 3)
+    for i in range(3):
+        (tmp_path / f"PMC{i}.txt").write_text("body")
+    monkeypatch.setattr(corpus_fetch, "OUTDIR", str(tmp_path))
+    monkeypatch.setattr(
+        corpus_fetch, "search_pmc", lambda *_a, **_k: pytest.fail("hit the network")
+    )
+    corpus_fetch.main()
+    assert "already complete" in capsys.readouterr().out

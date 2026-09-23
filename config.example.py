@@ -1,24 +1,46 @@
 """
-config.example.py  --  copy to config.py and fill in.
+config.example.py  --  the template for config.py.  You do not have to touch it.
 
-    cp config.example.py config.py
+    make start        # generates config.py from this file and fills it in
+
+There is nothing here you are expected to edit by hand.  `make start` (and
+`make build-kb`, and `make preflight`) call bootstrap.ensure_config(), which
+copies this file to config.py the first time and fills in:
+
+    REGION        the region your AWS profile resolves to, if Bedrock there has
+                  all four models; otherwise us-west-2, where this demo is
+                  developed, rehearsed and priced
+    ACCOUNT_ID    from `sts get-caller-identity`
+    BUCKET        derived as "inside-the-lines-pcsk9-<account-id>", which is
+                  globally unique by construction, and created for you
+
+and build_kb.py then WRITES the seven resource IDs below into config.py when it
+has provisioned them (backing the file up to config.py.bak first).  You used to
+have to copy those seven values out of its stdout by hand.
+
+You may still edit config.py -- it is a plain Python file and a real value you
+put in it always wins.  Nothing in this repo overwrites a value you chose; the
+automatic fillers only replace an empty string or one of the placeholders below.
 
 config.py is git-ignored. Never commit real account IDs, bucket names,
 or knowledge-base IDs.
 """
 
 # --- account / region ---------------------------------------------------
+# All three of these are filled in automatically; the values here are
+# placeholders that bootstrap.py recognises as "not set yet".  Overwrite any of
+# them with a real value and it will be respected from then on.
 REGION = "us-west-2"  # region where KB, Bedrock models, S3 Vectors,
 # and AgentCore Code Interpreter all live
-ACCOUNT_ID = "000000000000"
-BUCKET = "your-corpus-bucket"  # S3 bucket holding the paper corpus
+ACCOUNT_ID = "000000000000"  # auto-filled from sts get-caller-identity
+BUCKET = "your-corpus-bucket"  # auto-derived AND auto-created; holds the corpus
 CORPUS_PREFIX = "corpus/"
 
-# --- filled in by build_kb.py (paste its output back here) --------------
+# --- written in by build_kb.py when it finishes (nothing to copy) --------
 KB_ID = ""
 DATA_SOURCE_ID = ""
 
-# --- guardrail (filled in by build_kb.py) ----------------------------
+# --- guardrail (written in by build_kb.py) ------------------------------
 GUARDRAIL_ID = ""
 GUARDRAIL_VERSION = "DRAFT"
 
@@ -94,7 +116,7 @@ EMBED_USD_PER_1M_TOKENS = 0.02  # fallback -- Titan Embed v2 per 1M tokens
 # Alias used by CostMeter (keeps the config key consistent with pricing module):
 KB_QUERY_USD_PER_1K = S3V_QUERY_USD_PER_1K
 
-# --- gateway (filled in by build_kb.py) ----------------------------
+# --- gateway (written in by build_kb.py) --------------------------------
 GATEWAY_NAME = "inside-the-lines-gateway"
 GATEWAY_ID = ""
 GATEWAY_URL = ""

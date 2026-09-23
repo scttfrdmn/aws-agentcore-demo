@@ -7,8 +7,17 @@ What this does:
   full text of each one as XML via the NCBI E-utilities API, parses out the
   article body, and saves each as a plain-text .txt file in ./corpus/.
 
-  After running this, sync the corpus to S3 before running build_kb.py:
-      aws s3 sync ./corpus s3://<your-bucket>/corpus/
+  Nothing to do afterwards.  `make build-kb` creates the S3 bucket and uploads
+  ./corpus/ into it as its first step (see bootstrap.upload_corpus, and the
+  comment above it for why the upload lives there and not here).  This script
+  deliberately makes NO AWS calls at all, so the slow, free, network-bound step
+  works with no credentials configured yet.
+
+  Resumable.  This is the slowest step in the whole setup (10-15 minutes), so it
+  is safe to interrupt: articles already in ./corpus/ are counted and skipped, so
+  re-running picks up where it stopped, and re-running after a COMPLETE fetch
+  does nothing at all and costs nothing.  That is what makes `make start` safe
+  to re-run at any point.
 
 Why E-utilities and not the bulk datasets (checked 2026-09-22):
   PMC rebuilt its distribution service during 2026 (announced 2026-02-12,
@@ -67,8 +76,10 @@ Output:
   Each file starts with a comment header:
       # PMCxxxxxxx  licence: CC0
 
-  The corpus/ directory is gitignored.  Re-run this script to refresh it;
-  files already present are overwritten (idempotent).
+  The corpus/ directory is gitignored.  Files already present are KEPT and
+  counted (see is_complete / main below), so a re-run resumes rather than
+  refetching.  To force a genuinely fresh corpus, delete ./corpus/ first --
+  `make teardown` already does that for you.
 
 What to do if the fetch fails:
   - Rate limit (429 or HTTP errors): add NCBI_API_KEY (see below) to go faster,
@@ -283,9 +294,49 @@ def fetch_article(pmcid):
     return (licence, text) if len(text) > 1500 else (licence, None)
 
 
+def existing_ids(outdir=OUTDIR) -> set[str]:
+    """Return the PMC IDs already downloaded into `outdir` (no "PMC" prefix).
+
+    The basis of both resumption and the "already done, skip it" shortcut.
+    Filenames are the source of truth rather than a state file: a state file can
+    disagree with the directory, a directory cannot disagree with itself.
+    """
+    if not os.path.isdir(outdir):
+        return set()
+    return {
+        f[3:-4]
+        for f in os.listdir(outdir)
+        if f.startswith("PMC") and f.endswith(".txt") and os.path.getsize(f"{outdir}/{f}") > 0
+    }
+
+
+def is_complete(outdir=OUTDIR, target=TARGET) -> bool:
+    """True if `outdir` already holds a full corpus, so fetching can be skipped.
+
+    Called by start.py so the single `make start` entry point can re-run end to
+    end without spending 10-15 minutes re-downloading a corpus that is already
+    on disk.
+    """
+    return len(existing_ids(outdir)) >= target
+
+
 def main():
-    """Main loop: search, filter, and save the corpus."""
+    """Main loop: search, filter, and save the corpus.  Resumable."""
     os.makedirs(OUTDIR, exist_ok=True)
+
+    # Resume: whatever is already on disk counts toward TARGET.  A finished
+    # corpus makes this a no-op, which is what lets `make start` be re-run.
+    # OUTDIR is passed explicitly rather than relying on the default argument:
+    # a default is bound once, at def time, so `existing_ids()` would silently
+    # ignore a caller (or a test) that had changed OUTDIR.
+    have = existing_ids(OUTDIR)
+    if len(have) >= TARGET:
+        print(f"Corpus already complete: {len(have)} articles in ./{OUTDIR}/ -- nothing to do.")
+        print(f"(Delete ./{OUTDIR}/ if you want a genuinely fresh corpus.)")
+        return
+    if have:
+        print(f"Resuming: {len(have)} of {TARGET} articles already in ./{OUTDIR}/")
+
     print(f"Searching PMC for open-access {GENE} articles...")
 
     # Over-fetch by 1.8× because many articles will be filtered out.
@@ -293,10 +344,12 @@ def main():
     ids = search_pmc(int(TARGET * 1.8))
     print(f"  {len(ids)} candidate PMCIDs")
 
-    kept, skipped = 0, 0
+    kept, skipped = len(have), 0
     for pmcid in ids:
         if kept >= TARGET:
             break
+        if pmcid in have:
+            continue  # already downloaded on an earlier run -- do not refetch
 
         licence, text = fetch_article(pmcid)
         time.sleep(DELAY)  # respect NCBI rate limits
@@ -314,7 +367,9 @@ def main():
             print(f"  kept {kept}  (skipped {skipped} non-commercial / empty)")
 
     print(f"\nDone. {kept} commercial-use articles in ./{OUTDIR}/")
-    print(f"Next:  aws s3 sync ./{OUTDIR} s3://YOUR-BUCKET/corpus/")
+    # No manual upload step any more.  `make build-kb` creates the bucket and
+    # uploads this directory itself.
+    print("Next:  make build-kb   (creates the S3 bucket, uploads these, provisions the KB)")
 
 
 if __name__ == "__main__":

@@ -21,11 +21,14 @@ reliability of a live run, and honest cost numbers.
 
 **The demo is built and works.** It was written 2026-05-20 → 06-12 and has been run
 live against the real account. Treat everything below as working code to be reviewed
-and adjusted, not scaffolding to be filled in. `ruff` is clean and 88 tests pass.
+and adjusted, not scaffolding to be filled in. `ruff` is clean and 143 tests pass.
 
 | file | role |
 |---|---|
-| `corpus_fetch.py` | pulls the PMC paper corpus, licence-filtered |
+| `start.py` | **the entry point** (`make start`) — the whole chain, resumable |
+| `bootstrap.py` | config generation + write-back, bucket derive/create, corpus upload |
+| `preflight.py` | read-only checks; one actionable sentence per problem |
+| `corpus_fetch.py` | pulls the PMC paper corpus, licence-filtered; resumable |
 | `build_kb.py` | provisions the KB (S3 Vectors), Guardrail, Gateway + Cedar policy; idempotent |
 | `teardown.py` | deletes every billable resource **and** the local `corpus/` dir |
 | `src/agentcore_demo/questions.py` | the five locked questions + system prompts; read its docstring first |
@@ -38,9 +41,127 @@ and adjusted, not scaffolding to be filled in. `ruff` is clean and 88 tests pass
 | `src/agentcore_demo/app.py` | FastAPI: `/ws` WebSocket, serves the page, opens the browser |
 | `src/agentcore_demo/run.py` | headless runner — all questions, no browser |
 | `src/agentcore_demo/static/index.html` | the live page (Alpine.js, no build step) |
-| `tests/` | `test_cost.py`, `test_agent.py`, `test_app.py`, `conftest.py` |
+| `tests/` | `test_cost.py`, `test_agent.py`, `test_app.py`, `test_bootstrap.py`, `test_corpus_licence.py`, `test_sdk_contract.py`, `conftest.py` |
 
 There is no `INITIAL_PROMPT.md` — that planning doc was removed in `91fb746`.
+
+## Zero-config setup — the operator gets nothing right by hand
+
+Added 2026-09-22 on the owner's instruction: *"They should NOT have to get
+anything right — it should just work."* This is a **public** repo; assume a
+non-technical operator who clones it five minutes before a session, reads
+nothing, and edits nothing. The target experience is exactly:
+
+```
+git clone … && cd aws-agentcore-demo && make start
+```
+
+Five things used to be the reader's problem, and every one of them failed a run.
+Do not reintroduce any of them:
+
+1. **`ACCOUNT_ID`** — now `bootstrap.resolve_account_id()`, via STS
+   `get_caller_identity` (the one call that needs no IAM permission, so its
+   failure unambiguously means "bad credentials").
+2. **`BUCKET`** — now `bootstrap.derive_bucket_name()`:
+   `inside-the-lines-pcsk9-<account-id>`. Unique **by construction** (S3's
+   namespace is global; an account ID is not shared) and **deterministic** — a
+   random suffix would make a re-run build a second bucket and pay to ingest
+   twice. `bucket_name_problem()` validates it against S3's naming rules before
+   AWS ever sees it.
+3. **Bucket creation** — `bootstrap.ensure_bucket()`. See below for the
+   `create_bucket` region asymmetry; it is the trap in this whole area.
+4. **The corpus upload** — `bootstrap.upload_corpus()`, called from
+   `build_kb.ensure_corpus_bucket()`. README step 4 (`aws s3 sync`) is gone.
+5. **The seven pasted IDs** — `bootstrap.write_config()` writes them into
+   `config.py`. See "the config rewriter" below.
+
+**`config.py` is never hand-edited.** `bootstrap.ensure_config()` generates it in
+full from the tracked `config.example.py` when absent, and when present fills
+*only* values that are empty or still a shipped placeholder (`PLACEHOLDERS`). **A
+real value a human typed always wins** — that rule is what makes the whole chain
+safe to re-run, so preserve it. `make start` is idempotent end to end; each step
+detects "already done" and skips.
+
+### `create_bucket` has two shapes and only one is right per region
+
+```python
+kwargs = {"Bucket": bucket}
+if region != "us-east-1":
+    kwargs["CreateBucketConfiguration"] = {"LocationConstraint": region}
+```
+
+- **us-east-1**: `CreateBucketConfiguration` must be **omitted**; passing it
+  returns `InvalidLocationConstraint`.
+- **Every other region**: it is **required**; omitting it silently creates the
+  bucket in us-east-1, which then makes KB ingestion pay cross-Region transfer —
+  a wrong answer with no error.
+
+The failure is **server-side**. `us-east-1` is absent from botocore's
+`LocationConstraint` enum, but botocore does not enforce enums, so
+`validate_parameters` accepts the bad call happily (verified 2026-09-22). There is
+no local check that catches this, which is why it is handled in code.
+
+### The config rewriter cannot corrupt a hand-edited file
+
+`config.py` is git-ignored, so a bad write is unrecoverable. Four safeguards, in
+firing order — keep all four:
+
+1. A line is touched only if the **whole line** matches
+   `NAME = "simple string"  # optional comment` at column 0. `MODELS`, `PRICING`,
+   numbers, expressions, indented lines and comments are unreachable **by
+   construction**, not by a check that could be got wrong.
+2. The new text is `ast.parse`d and the values read back and compared to what was
+   intended — **before** anything is written.
+3. Only then is `config.py` copied to `config.py.bak`, and said so on stdout.
+4. If the new text is byte-identical, nothing is written, so a second run cannot
+   duplicate a line.
+
+A name present but *not* a simple literal is skipped **and reported**, and
+deliberately **not** appended at the end — an appended assignment would silently
+shadow the human's expression. Names absent entirely are appended once, in one
+marked block. `tests/test_bootstrap.py` pins all of this.
+
+### The upload lives in build_kb.py, not corpus_fetch.py
+
+Deliberate; don't "tidy" it the other way. `build_kb.py` is the step that *needs*
+the objects (its ingestion job reads the prefix, and an empty prefix yields a
+"successful" empty KB that fails on stage), so putting the upload immediately
+before ingestion makes the precondition a guarantee rather than a hope about
+command ordering — including for the `make corpus` → Ctrl-C → `make build-kb`
+path. `corpus_fetch.py` stays **AWS-free** (only `requests`) so the slow, free,
+network-bound step needs no credentials. Pure boto3, never the `aws` CLI: the CLI
+may not be installed; boto3 already is.
+
+### Preflight says one sentence, never a traceback
+
+`preflight.py` is read-only and free, and runs before anything is created.
+Checks: credentials (absent vs expired, different fix each), S3 Vectors +
+AgentCore reachable in the region, all four `MODELS` plus the Titan embedder
+ACTIVE, and `iam:SimulatePrincipalPolicy` for the 15 actions provisioning needs
+(read-only, and the only way to answer "will this work?" without doing it; if the
+simulation is itself denied, the check is skipped with a note rather than
+blocking a run that would have worked).
+
+Two constraints on its wording. **No console** — the guardrail binds hardest
+here, because "open the Bedrock console and request access" is the obvious advice
+for a missing model and is not allowed; name a CLI command or a `config.py` edit.
+And never advise switching to the region the reader is already in
+(`_switch_region_advice`); advice you have already followed reads as a bug.
+
+`bootstrap.safe_session()` exists because **`boto3.Session()` raises
+`ProfileNotFound` in its constructor** — a typo'd or empty `AWS_PROFILE` produced
+a 30-line traceback before any friendly message could run. Build sessions through
+it. An empty `AWS_PROFILE` is treated as unset.
+
+### It does not ask before spending money
+
+Owner's call: `start.py` prints the cost and proceeds. Informed, not
+interrogated — stopping a scripted five-minute demo to ask "are you sure?" is its
+own sharp edge. `make plan` (`--dry-run`) is available but never required. The
+figures live in one place, `bootstrap.COST_*` + `cost_notice()`, and are
+**measured, dated (2026-09-22, us-west-2) and hedged** as approximate, because
+a stranger's corpus differs. Do not round them into vagueness or restate them
+from memory elsewhere.
 
 ## Architecture
 
@@ -73,7 +194,7 @@ truth):
 | `cost` | `total` | running cost-meter total |
 | `route` | `path` (`SYNTHESIS`\|`ANALYSIS`\|`DEBATE`), `label` | free-form routing result; emitted before the question event |
 | `guardrail` | see `agent.py` | Bedrock Guardrail intercepted external links — redirected to the local corpus copy, or BLOCKED when there is no local match |
-| `policy_denied` | see `agent.py` | the Cedar `ForbidWeb` policy denied the Q4 Gateway tool call; agent falls back to the KB |
+| `policy_denied` | see `agent.py` | the Cedar `ForbidWeb` policy denied the Q5 Gateway tool call; agent falls back to the KB |
 | `setup_cost` | `ingestion_usd`, `storage_usd_per_month` | KB panel costs: ingestion computed from corpus size, storage from vector count (NOT metered, NOT in run total) |
 | `receipt` | `rows`, `total` | the final itemised receipt |
 | `done` | — | run complete |
@@ -105,8 +226,8 @@ Keep this protocol stable. If the page needs more, add a field; don't repurpose.
   written. (This entry previously said "VERIFY before running"; that's done.)
 - **Guardrail / Gateway**: `build_kb.py` also provisions a Bedrock Guardrail (used
   to intercept external links in model output and swap in the local corpus copy)
-  and an AgentCore Gateway with a Cedar `ForbidWeb` policy for beat 4.
-- **The beat-4 tool is real** (verified 2026-09-22). `build_kb.create_gateway_target()`
+  and an AgentCore Gateway with a Cedar `ForbidWeb` policy for beat 5.
+- **The beat-5 tool is real** (verified 2026-09-22). `build_kb.create_gateway_target()`
   creates an MCP-category **OpenAPI** target named `web-tools` whose inline schema
   (`web_tools_openapi_schema()`) wraps the public ClinicalTrials.gov v2 API:
   ```python
@@ -133,7 +254,7 @@ Keep this protocol stable. If the page needs more, add a field; don't repurpose.
   - There is **no Lambda anywhere in this repo.** Earlier comments and a
     `teardown.py` block implied an `inside-the-lines-web-tool` function; nothing
     ever created it and both were removed on 2026-09-22.
-- **HTTP passthrough targets cannot serve beat 4** (verified 2026-09-22). They are
+- **HTTP passthrough targets cannot serve beat 5** (verified 2026-09-22). They are
   the obvious Lambda-free choice and they are wrong here. HTTP targets are a
   *different category* from MCP targets: "unlike MCP targets, HTTP targets do not
   support capability synchronization or semantic tool search. Clients address each
@@ -150,7 +271,7 @@ Keep this protocol stable. If the page needs more, add a field; don't repurpose.
   success, `{"error": True, reason}` for everything else. This exists because a
   tool-not-found error carries none of the denial keywords and used to fall through
   to the success branch — the "Cedar Policy Denied" badge would then silently not
-  appear on stage. `agent.py`'s `question_4` surfaces the `error` case through a
+  appear on stage. `agent.py`'s `question_5` surfaces the `error` case through a
   `phase` line and never fakes the badge. `backend.py`'s `query_gateway`
   docstring documents all three outcomes.
 
@@ -165,7 +286,7 @@ never actually been exercised are now exercised. Findings worth keeping:
   `action == "InvokeTool" ... when { context.toolName == "web_fetch" }`, which
   **never matched**. That went unnoticed for months because no real gateway
   target existed, so the call failed for unrelated reasons and the UI showed a
-  denial anyway. Once `web-tools` became a real OpenAPI target, beat 4 silently
+  denial anyway. Once `web-tools` became a real OpenAPI target, the Cedar beat silently
   *succeeded* — fetching live ClinicalTrials.gov data and demonstrating the
   exact opposite of its own security point. A denial names the policy:
   `Tool Execution Denied: ... [Policy evaluation denied due to ForbidWeb-xxxx]`.
@@ -190,7 +311,7 @@ never actually been exercised are now exercised. Findings worth keeping:
   that were really the wrong key being read; `list_policies()` works fine.
 - **The gateway policy engine needs `bedrock-agentcore:*Authorize*`.** Without
   it, `update_gateway()` fails and the Cedar beat cannot be wired up at all.
-- **Beat 4 was excluded by default.** `agent.run()`, `app.py::_run_agent` and
+- **The Cedar beat was excluded by default.** `agent.run()`, `app.py::_run_agent` and
   `run.py --questions` all defaulted to `(1, 2, 3)`.
 - **`run.py` and `app.py` built the backend differently** — `run.py` passed no
   guardrail and no gateway, so `make demo-headless` verified *neither* security
@@ -201,7 +322,13 @@ never actually been exercised are now exercised. Findings worth keeping:
 
 - Python 3.11, `src/` layout, package is `agentcore_demo`.
 - **Always `uv`, never bare `pip`**: `uv pip install -e ".[dev]"`, `uv run ...`.
-- **`make lint` / `make test` work from a cold checkout** (88 tests) — no
+- **`start.py`, `bootstrap.py`, `preflight.py`, `build_kb.py`, `corpus_fetch.py`
+  and `teardown.py` live at the repo ROOT**, not under `src/`, because they
+  `import config` (the root `config.py`). `tests/conftest.py` puts the root on
+  `sys.path` so tests can import them. In `build_kb.py` the
+  `bootstrap.ensure_config()` call **must precede** `import config as cfg` (it is
+  what creates the file) — hence the `# noqa: E402`; do not reorder it.
+- **`make lint` / `make test` work from a cold checkout** (143 tests) — no
   `make install` needed. They pass `--extra dev` explicitly. This used to fail
   with `ModuleNotFoundError: No module named 'agentcore_demo'` because bare
   `uv run pytest` installs neither the package nor the dev extra; fixed
@@ -298,7 +425,15 @@ How it works now:
   sources, gateway targets, and Cedar policies. They are reached through their
   parents. Don't "fix" this by inventing an ARN.
 - The S3 corpus bucket is the only resource whose name the project doesn't
-  control, so it is also found via the Resource Groups Tagging API.
+  control, so it is also found via the Resource Groups Tagging API. Since
+  2026-09-22 it is *also* caught by the **name** backstop, which is a second
+  reason the derived name starts with the project stem:
+  `inside-the-lines-pcsk9-<account-id>` normalises to
+  `insidethelinespcsk9<account-id>`, which `startswith("insidethelines")`. So the
+  bucket is claimed by all three signals — `config`, `tag`, `name`. Renaming
+  `bootstrap.BUCKET_STEM` to anything not beginning "inside the lines" would
+  silently break that; `tests/test_bootstrap.py` pins it (duplicating the
+  normaliser rather than importing `teardown`, which builds clients at import).
 
 **Still unverified:** no tag has yet been applied to a live resource, and no
 real deletion has run through this code path. The cheapest closing check is
@@ -336,9 +471,12 @@ commit.
 
 - **No console.** Everything is scripted. Don't add "go click in the AWS console"
   steps anywhere.
-- **No real identifiers committed.** `config.py` is git-ignored; only
-  `config.example.py` is tracked. Never hard-code account IDs, bucket names, or
-  KB IDs.
+- **No real identifiers committed.** `config.py` **and `config.py.bak`** are
+  git-ignored; only `config.example.py` is tracked. Never hard-code account IDs,
+  bucket names, or KB IDs — `bootstrap.py` derives them at runtime instead.
+- **Nothing for the operator to get right.** No step may require looking a value
+  up, inventing a name, copying output between commands, or reading the README.
+  If you add a value, derive it or write it back; do not print "paste this".
 - **Always provide teardown.** Any AWS resource a script creates, `teardown.py`
   must be able to delete.
 - **The five questions are locked** (`questions.py`). They are rehearsed for the
