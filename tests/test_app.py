@@ -133,7 +133,7 @@ def test_ws_streams_complete_run_ending_in_done(fake_env):
     types = [e["type"] for e in events]
     assert types[-1] == "done"
     assert "receipt" in types
-    assert types.count("question") == 4  # four beats since 2026-09-22
+    assert types.count("question") == 5  # five beats since 2026-09-22
 
 
 def test_ws_receipt_total_matches_row_sum(fake_env):
@@ -175,9 +175,9 @@ def test_ws_question_precedes_its_model_events(fake_env):
     if current:
         blocks.append(current)
 
-    # Four beats, not three: the run default became (1, 2, 3, 4) on 2026-09-22
+    # Five beats: a plain opener was inserted before the guardrail beat
     # when we found beat 4 (the Cedar policy demo) was excluded by default.
-    assert len(blocks) == 4
+    assert len(blocks) == 5
     for block in blocks:
         assert block[0]["type"] == "question"
         model_indices = [i for i, e in enumerate(block) if e["type"] == "model"]
@@ -226,25 +226,27 @@ def test_ws_client_disconnect_mid_run_does_not_raise(fake_env):
 # ── /api/questions + /ws?q=N ─────────────────────────────────────────────────
 
 
-def test_get_questions_returns_four_texts(fake_env):
+def test_get_questions_returns_five_texts(fake_env):
     _reset_backend()
     with TestClient(app) as client:
         resp = client.get("/api/questions")
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body["questions"]) == 4
+    assert len(body["questions"]) == 5
     for text in body["questions"]:
         assert isinstance(text, str) and len(text) > 10
 
 
 def test_ws_single_question_runs_only_that_question(fake_env):
     _reset_backend()
-    with TestClient(app) as client, client.websocket_connect("/ws?q=2") as ws:
+    # q=3 is the chart beat (code generation + Code Interpreter).  It was q=2
+    # until a plain opener was inserted ahead of the guardrail beat on 2026-09-22.
+    with TestClient(app) as client, client.websocket_connect("/ws?q=3") as ws:
         events = _collect(ws)
 
     question_events = [e for e in events if e["type"] == "question"]
     assert len(question_events) == 1
-    assert question_events[0]["n"] == 2
+    assert question_events[0]["n"] == 3
     assert any(e["type"] == "chart" for e in events)
     assert events[-1]["type"] == "done"
 

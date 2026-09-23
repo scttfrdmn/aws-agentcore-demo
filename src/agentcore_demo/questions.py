@@ -9,11 +9,31 @@ Why PCSK9?
   PCSK9 is a well-studied gene with a clear mechanism (LDL regulation),
   active clinical trials, and genuine scientific controversy (off-target
   effects of inhibition).  It provides rich, layered questions that each
-  call for a different AI approach -- making it ideal for a four-beat demo.
+  call for a different AI approach -- making it ideal for a five-beat demo.
 
-The four demo beats and their model choices:
+The five demo beats and their model choices:
 
-  Beat 1 -- "Friction gone"
+  Beat 1 -- "Just ask it"
+    Question: What does PCSK9 do, and why do cardiologists care about it?
+    Model: Claude Haiku 4.5
+    Story: The plainest possible thing: a researcher asks a question and gets a
+           cited answer from 1,000 of their own papers, in seconds, for a
+           fraction of a cent.  Nothing else happens on screen.
+    Why this beat exists (added 2026-09-22): beat 2 used to open the demo and
+           carry this message AND the guardrail interception badge at the same
+           time.  That forced a choice in the first thirty seconds -- explain a
+           security mechanism the audience has not been introduced to, or leave
+           something visible unexplained.  Splitting them makes the guardrail a
+           reveal in beat 2 instead of ambient noise in beat 1.
+    Why Haiku: same reasoning as beat 2 -- cheap, fast, accurate enough.
+    Note: this beat deliberately does NOT fire the Guardrail.  Its system prompt
+           asks for bare PMC IDs rather than full NCBI URLs, so there is nothing
+           for the guardrail to intercept.  Citations are still clickable --
+           agent.py linkifies bare PMC IDs to the local corpus directly, which
+           does not depend on guardrail interception.
+
+
+  Beat 2 -- "The links never leave"
     Question: What is the established role of PCSK9 in LDL-cholesterol regulation?
     Model: Claude Haiku 4.5 (cheapest capable model)
     Story: A researcher asks a plain background question.  Haiku reads 1,000 papers,
@@ -23,7 +43,7 @@ The four demo beats and their model choices:
                cheap, and accurate enough.  The audience sees high quality
                at low cost -- a key demo point.
 
-  Beat 2 -- "Real work, faster"
+  Beat 3 -- "Real work, faster"
     Question: Compare the reported LDL-lowering effects across the clinical trials
               in this corpus, and chart them.
     Model: Claude Sonnet 5 (for code generation) + AgentCore Code Interpreter
@@ -33,7 +53,7 @@ The four demo beats and their model choices:
     Why Sonnet: Code generation needs more reasoning than Haiku provides but
                 does not require Opus-level depth.  Sonnet is the right size.
 
-  Beat 3 -- "A second opinion"
+  Beat 4 -- "A second opinion"
     Question: Where does the literature disagree about the off-target or adverse
               effects of PCSK9 inhibition, and what should be tested next?
     Models: Claude Opus 5 AND OpenAI GPT-6 Astra (parallel) + Claude Sonnet adjudicates
@@ -60,7 +80,7 @@ The four demo beats and their model choices:
                   is an honest and useful thing to show -- the audience sees the
                   hardest question cost the most, and still well under a dollar.
 
-  Beat 4 -- "Secure by policy"
+  Beat 5 -- "Secure by policy"
     Question: Search ClinicalTrials.gov for ongoing trials testing the experiments
               Q3 identified as priorities.
     Model: Claude Haiku 4.5
@@ -75,8 +95,9 @@ The four demo beats and their model choices:
 
 SUBJECT = "PCSK9"
 
-# The four canned questions -- locked for the live talk.
+# The five canned questions -- locked for the live talk.
 QUESTIONS = [
+    "What does PCSK9 do, and why do cardiologists care about it?",
     "What is the established role of PCSK9 in LDL-cholesterol regulation?",
     "Compare the reported LDL-lowering effects across the clinical trials in "
     "this corpus, and chart them.",
@@ -85,6 +106,20 @@ QUESTIONS = [
     "Search ClinicalTrials.gov for ongoing trials testing the experiments "
     "Q3 identified as priorities.",
 ]
+
+# System prompt for Q1 -- the plain opener (Claude Haiku).
+# Deliberately asks for BARE PMC IDs, not full NCBI URLs: with no external URL
+# in the output there is nothing for the Bedrock Guardrail to intercept, so this
+# beat shows a clean question-and-answer with no security badge competing for
+# attention.  agent.py linkifies "PMCxxxxxxx" to /corpus/PMCxxxxxxx directly, so
+# the citations are still clickable.  Keep the two in step: if you change the
+# citation format here, update _linkify_bare_pmc_ids() in agent.py.
+PLAIN_SYSTEM = (
+    "You are a biomedical research assistant. Answer from the provided passages "
+    "only, in at most 150 words. After each claim, cite the source as a bare "
+    "PubMed Central ID in square brackets, e.g. [PMC13156736]. Do NOT write full "
+    "URLs or links of any kind -- the bracketed ID alone."
+)
 
 # System prompt for Q1 -- cited synthesis (Claude Haiku).
 # We instruct the model to include full NCBI URLs so the Bedrock Guardrail

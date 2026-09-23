@@ -9,18 +9,26 @@ A five-minute live demo for a research-computing audience showing frontier
 AI agents running entirely within a secure AWS boundary, billed only for
 what they use.
 
-The agent answers four questions about the gene *PCSK9* against a Bedrock
+The agent answers five questions about the gene *PCSK9* against a Bedrock
 Knowledge Base of 1,000 open-access PMC papers (~48 MB), with a live cost
 meter and a receipt at the end.
 
 | Beat | Question | Models | Security feature |
 |------|----------|--------|-----------------|
-| Q1 | Role of PCSK9 in LDL regulation | Claude Haiku | **Bedrock Guardrail** intercepts NCBI URLs → redirects to local corpus |
-| Q2 | Compare trial LDL-lowering + chart | Claude Sonnet + Code Interpreter | Isolated microVM for code execution |
-| Q3 | Where does the literature disagree? | Claude Opus + OpenAI GPT-6 Astra (parallel) + Sonnet adjudicates | **Bedrock Guardrail** (same as Q1) |
-| Q4 | Search ClinicalTrials.gov for ongoing trials | Claude Haiku | **AgentCore Gateway Cedar policy** blocks a real web tool |
+| Q1 | What does PCSK9 do, and why do cardiologists care? | Claude Haiku | none — deliberately. A plain question and a cited answer, nothing else on screen |
+| Q2 | Role of PCSK9 in LDL regulation | Claude Haiku | **Bedrock Guardrail** intercepts NCBI URLs → redirects to local corpus |
+| Q3 | Compare trial LDL-lowering + chart | Claude Sonnet + Code Interpreter | Isolated microVM for code execution |
+| Q4 | Where does the literature disagree? | Claude Opus + OpenAI GPT-6 Astra (parallel) + Sonnet adjudicates | **Bedrock Guardrail** (same as Q2) |
+| Q5 | Search ClinicalTrials.gov for ongoing trials | Claude Haiku | **AgentCore Gateway Cedar policy** blocks a real web tool |
 
-Q4 is worth a note: the `web_fetch` tool the agent reaches for is not a prop. It is
+Q1 exists so that Q2 can be a reveal. Q1 and Q2 ask nearly the same thing; the
+only difference is that Q1's system prompt asks for bare `[PMCxxxxxxx]` citations
+while Q2's asks for full NCBI URLs. So Q1 has nothing for the Guardrail to
+intercept and shows no badge, and Q2 shows the interception on otherwise
+identical ground. Q1's citations are still clickable — bare PMC IDs are linked to
+the local corpus directly, without needing the guardrail.
+
+Q5 is worth a note: the `web_fetch` tool the agent reaches for is not a prop. It is
 an AgentCore Gateway **OpenAPI target** (`web-tools`) pointing at the public
 ClinicalTrials.gov v2 API — no Lambda, nothing to maintain. Remove the Cedar
 `ForbidWeb` policy and the call really does fetch trials. The demo's point is that
@@ -126,7 +134,7 @@ When it finishes, paste the printed IDs into `config.py`.
 AWS_PROFILE=your-profile make demo-headless
 ```
 
-Runs all four questions and prints a receipt. Expected cost: **about $0.32** —
+Runs all five questions and prints a receipt. Expected cost: **about $0.32** —
 a full four-question run measured **$0.317** on 2026-09-22. Q3 dominates it,
 because GPT-6 Astra is the priciest model in the set.
 

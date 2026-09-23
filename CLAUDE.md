@@ -9,7 +9,7 @@ on AWS Bedrock, given to a university research-computing audience. The thesis of
 the talk: you can give researchers frontier-model AI agents **without the data
 leaving a secure environment**, and pay pennies for it.
 
-The demo drives one biomedical-research agent through four escalating questions
+The demo drives one biomedical-research agent through five escalating questions
 about the gene *PCSK9*, against a Bedrock Knowledge Base of ~1,000 open-access
 papers, and shows — in a **local web page, live** — what the agent is doing and
 what it costs.
@@ -28,7 +28,7 @@ and adjusted, not scaffolding to be filled in. `ruff` is clean and 88 tests pass
 | `corpus_fetch.py` | pulls the PMC paper corpus, licence-filtered |
 | `build_kb.py` | provisions the KB (S3 Vectors), Guardrail, Gateway + Cedar policy; idempotent |
 | `teardown.py` | deletes every billable resource **and** the local `corpus/` dir |
-| `src/agentcore_demo/questions.py` | the four locked questions + system prompts; read its docstring first |
+| `src/agentcore_demo/questions.py` | the five locked questions + system prompts; read its docstring first |
 | `src/agentcore_demo/cost.py` | the cost meter (pure logic) |
 | `src/agentcore_demo/pricing.py` | Bedrock rate tables and setup-cost derivation |
 | `src/agentcore_demo/aws.py` | real AWS backend: `retrieve`, `converse`, `code_interpreter_run`, guardrail, gateway |
@@ -156,7 +156,8 @@ Keep this protocol stable. If the page needs more, add a field; don't repurpose.
 
 ## Verified live 2026-09-22 (a full run against the real account)
 
-All four beats were run end to end. Total **$0.317**, and the things that had
+All beats were run end to end (four at the time; a plain opener was added
+afterwards, making five at **$0.323**). Total **$0.317**, and the things that had
 never actually been exercised are now exercised. Findings worth keeping:
 
 - **Cedar's action IS the prefixed MCP tool name.** The rule must read
@@ -314,7 +315,7 @@ branches stamp the tags) then `make teardown-dry-run` — every line should read
   KB IDs.
 - **Always provide teardown.** Any AWS resource a script creates, `teardown.py`
   must be able to delete.
-- **The four questions are locked** (`questions.py`). They are rehearsed for the
+- **The five questions are locked** (`questions.py`). They are rehearsed for the
   live talk; do not reword them.
 - **Cost numbers must be real.** The cost meter computes from actual `usage`
   tokens × the rates in `config.py`. Never fabricate or hard-code a total.
@@ -322,20 +323,31 @@ branches stamp the tags) then `make teardown-dry-run` — every line should read
   no npm, no bundler. The page must open by just loading a file the FastAPI app
   serves.
 
-## The demo's four beats (for context, so the UI tells the right story)
+## The demo's five beats (for context, so the UI tells the right story)
 
-1. *Friction gone* — one plain question; Claude Haiku reads and cites. The Bedrock
-   Guardrail intercepts the NCBI URLs and the UI shows the interception badge.
-2. *Real work, faster* — Claude Sonnet writes analysis code; AgentCore Code
+1. *Just ask it* — the plainest possible thing: one question, Claude Haiku, a
+   cited answer from 1,000 of the researcher's own papers, a fraction of a cent.
+   Nothing else on screen. This beat **deliberately does not fire the Guardrail**
+   (`PLAIN_SYSTEM` asks for bare PMC IDs, not URLs, so there is nothing to
+   intercept) — added 2026-09-22 because beat 2 used to carry this message *and*
+   the interception badge at once, forcing you to explain a security mechanism in
+   the first thirty seconds or leave something visible unexplained. Citations are
+   still clickable: `_linkify_bare_pmc_ids()` links bare IDs to the local corpus
+   independently of the guardrail. `tests/test_agent.py` pins this beat's
+   plainness, so don't hand it a guardrail, a chart, or a second model.
+2. *The links never leave* — same shape as beat 1, but the system prompt asks for
+   full NCBI URLs, so the Bedrock Guardrail intercepts them and the UI shows the
+   interception badge. Now a reveal rather than ambient noise.
+3. *Real work, faster* — Claude Sonnet writes analysis code; AgentCore Code
    Interpreter runs it in an isolated microVM and returns a chart.
-3. *A second opinion* — Claude Opus **and** OpenAI GPT-6 Astra read the evidence
+4. *A second opinion* — Claude Opus **and** OpenAI GPT-6 Astra read the evidence
    independently; Sonnet adjudicates where the two model families disagree.
    Astra replaced Amazon Nova Pro in Sept 2026 once OpenAI models reached Bedrock;
    both reviewers get the same 4096-token budget so the comparison is not rigged.
-   Astra ($11/$55 per 1M, `us.` Geo) is the priciest model here — Q3 dominates
+   Astra ($11/$55 per 1M, `us.` Geo) is the priciest model here — Q4 dominates
    the receipt, which is honest and worth saying out loud. See **Models** above
    for the full table and for why Claude Fable 5.1 is deliberately not used.
-4. *Secure by policy* — the agent tries to reach ClinicalTrials.gov through the
+5. *Secure by policy* — the agent tries to reach ClinicalTrials.gov through the
    AgentCore Gateway; a Cedar `ForbidWeb` policy denies it, and the agent falls
    back to the knowledge base.
    **The tool it tries to call is real**: `web-tools` is an OpenAPI gateway target
@@ -346,7 +358,7 @@ branches stamp the tags) then `make teardown-dry-run` — every line should read
    for why an HTTP passthrough target cannot be used instead.
 
 Then the receipt: a total well under a dollar, billed only for what ran.
-"Run complete" belongs **after Q4**, not after Q3.
+"Run complete" belongs **after Q5**, not earlier.
 
 `questions.py` carries the full per-beat rationale — which model, and why that
 model. Read it before changing anything about routing or model choice.
@@ -368,5 +380,5 @@ These were arrived at by watching the demo on a screen; several took many rounds
   sibling model finishes first.
 - The KB panel stays **visible at all times**, including its ingest state — it is
   something the speaker talks about. Never let a status line get overwritten.
-- Any of the four questions may also be asked free-form; the canned chips just
+- Any of the five questions may also be asked free-form; the canned chips just
   teletype the locked text and fire it, and track which have run.

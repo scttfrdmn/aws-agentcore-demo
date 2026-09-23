@@ -251,8 +251,44 @@ class Agent:
             text = text.replace("{EXTERNAL_URL}", "[link removed]")
             self.emit({"type": "guardrail", "actions": actions})
 
+        # Linkify bare PMC IDs against the local corpus.
+        #
+        # This is INDEPENDENT of the guardrail (2026-09-22).  Beat 1 asks the
+        # model for bare "[PMC13156736]" citations precisely so that no external
+        # URL exists and no guardrail badge fires -- but the papers should still
+        # be clickable, and until now the only thing that produced a /corpus/
+        # link was guardrail substitution above.  Doing it here means citations
+        # work with or without interception, which also makes every other beat
+        # more robust: if the guardrail ever misses a URL, the bracketed ID it
+        # leaves behind still becomes a link.
+        #
+        # Runs last, and only on IDs that are not already inside a Markdown
+        # link, so it cannot double-wrap what the guardrail block just built.
+        text = self._linkify_bare_pmc_ids(text)
+
         self.emit({"type": "cost", "total": round(self.meter.total, 6)})
         return text
+
+    @staticmethod
+    def _linkify_bare_pmc_ids(text: str) -> str:
+        """Turn "[PMCxxxxxxx]" into a link to the local copy, where we have one.
+
+        Only rewrites IDs we actually hold in corpus/ -- an ID we do not have
+        stays plain text rather than becoming a dead link, which matches what
+        the guardrail path does for the same case.
+
+        The negative lookahead for "(" is what stops this from double-wrapping
+        a citation the guardrail block already turned into
+        "[PMCxxxxxxx](/corpus/PMCxxxxxxx)".
+        """
+
+        def repl(m: re.Match) -> str:
+            pmcid = m.group(1)
+            if os.path.exists(f"corpus/{pmcid}.txt"):
+                return f"[{pmcid}](/corpus/{pmcid})"
+            return m.group(0)
+
+        return re.sub(r"\[(PMC\d+)\](?!\()", repl, text)
 
     # -- routing ---------------------------------------------------------
 
@@ -284,6 +320,38 @@ class Agent:
     # -- Q1: friction gone -- Haiku reads and cites ----------------------
 
     def question_1(self, text: str = Q.QUESTIONS[0]) -> None:
+        """Beat 1: the plain opener -- one question, one cited answer, no security theatre.
+
+        Added 2026-09-22.  Beat 2 used to open the demo while also carrying the
+        Guardrail interception badge, which forced a choice in the first thirty
+        seconds: explain a security mechanism nobody had been introduced to, or
+        leave something visible on screen unexplained.  This beat carries one
+        idea -- "ask a question, get a cited answer from your own 1,000 papers,
+        for a fraction of a cent" -- and beat 2 then gets to be a reveal.
+
+        It deliberately does NOT fire the Guardrail: PLAIN_SYSTEM asks for bare
+        PMC IDs rather than full NCBI URLs, so there is no external URL to
+        intercept and no badge appears.  Citations stay clickable because
+        _model() linkifies bare PMC IDs against the local corpus directly --
+        that path does not depend on guardrail interception.
+
+        Model: Claude Haiku 4.5, the cheapest capable model.  Measured ~19s.
+        """
+        self.emit({"type": "question", "n": 1, "text": text})
+        self.emit({"type": "phase", "label": "retrieving from the knowledge base"})
+        chunks = self._retrieve("Q1  retrieval", text)
+        self.emit({"type": "retrieval", "count": len(chunks)})
+        answer = self._model(
+            "Q1  synthesis",
+            "haiku",
+            "Claude Haiku",
+            Q.PLAIN_SYSTEM,
+            f"Passages:\n{self._context(chunks)}\n\n{text}",
+            max_tokens=1200,
+        )
+        self.emit({"type": "answer", "title": "Answer  ·  Claude Haiku", "text": answer})
+
+    def question_2(self, text: str = Q.QUESTIONS[1]) -> None:
         """Beat 1: Haiku answers a background question with citations.
 
         Demo story: "With Bedrock, a researcher can ask a plain question and
@@ -297,12 +365,12 @@ class Agent:
         URLs.  The guardrail intercepts them and the browser shows the
         "Bedrock Guardrail: N links intercepted" badge.
         """
-        self.emit({"type": "question", "n": 1, "text": text})
+        self.emit({"type": "question", "n": 2, "text": text})
         self.emit({"type": "phase", "label": "retrieving from the knowledge base"})
-        chunks = self._retrieve("Q1  retrieval", text)
+        chunks = self._retrieve("Q2  retrieval", text)
         self.emit({"type": "retrieval", "count": len(chunks)})
         result = self._model(
-            "Q1  synthesis",
+            "Q2  synthesis",
             "haiku",
             "Claude Haiku",
             Q.SYNTHESIS_SYSTEM,
@@ -312,7 +380,7 @@ class Agent:
 
     # -- Q2: real work -- Sonnet writes code, Code Interpreter runs it ---
 
-    def question_2(self, text: str = Q.QUESTIONS[1]) -> None:
+    def question_3(self, text: str = Q.QUESTIONS[2]) -> None:
         """Beat 2: Sonnet writes analysis code; Code Interpreter runs it in a microVM.
 
         Demo story: "Real analytical work -- Sonnet reads the trial data,
@@ -330,12 +398,12 @@ class Agent:
         case Sonnet wraps the code in a code block despite the system prompt
         telling it not to.
         """
-        self.emit({"type": "question", "n": 2, "text": text})
+        self.emit({"type": "question", "n": 3, "text": text})
         self.emit({"type": "phase", "label": "retrieving trial data"})
-        chunks = self._retrieve("Q2  retrieval", text, n=16)  # 16 passages for richer data
+        chunks = self._retrieve("Q3  retrieval", text, n=16)  # 16 passages for richer data
 
         code = self._model(
-            "Q2  code generation",
+            "Q3  code generation",
             "sonnet",
             "Claude Sonnet",
             Q.CODEGEN_SYSTEM,
@@ -350,7 +418,7 @@ class Agent:
 
         self.emit({"type": "phase", "label": "running in AgentCore Code Interpreter"})
         stdout, seconds = self.backend.code_interpreter_run(code)
-        self.meter.add_compute("Q2  analysis run", seconds)
+        self.meter.add_compute("Q3  analysis run", seconds)
         self.emit({"type": "cost", "total": round(self.meter.total, 6)})
 
         chart, clean = self._extract_chart(stdout)
@@ -366,7 +434,7 @@ class Agent:
 
     # -- Q3: the hard call -- Opus AND GPT-6 Astra in parallel, then adjudicate
 
-    def question_3(self, text: str = Q.QUESTIONS[2]) -> None:
+    def question_4(self, text: str = Q.QUESTIONS[3]) -> None:
         """Beat 3: Opus and GPT-6 Astra read evidence in parallel; Sonnet adjudicates.
 
         Demo story: "For the hardest question -- where experts disagree --
@@ -410,13 +478,13 @@ class Agent:
         After both reviews are done, Sonnet adjudicates: it identifies
         agreements, disagreements, and the highest-value next experiments.
         """
-        self.emit({"type": "question", "n": 3, "text": text})
+        self.emit({"type": "question", "n": 4, "text": text})
         # Say WHERE from, like Q1 and Q2 do.  These phase lines are the only
         # explanation the audience gets of what happens between clicking a
         # question and a model timer appearing, so a bare "retrieving" wastes
         # the one chance to say "this is a vector search over your own papers".
         self.emit({"type": "phase", "label": "retrieving from the knowledge base"})
-        chunks = self._retrieve("Q3  retrieval", text, n=16)
+        chunks = self._retrieve("Q4  retrieval", text, n=16)
         prompt = f"Passages:\n{self._context(chunks)}\n\n{text}"
 
         # Thread-safe emit wrapper -- needed because both reviewers run in parallel.
@@ -458,9 +526,9 @@ class Agent:
         # it finishes, so the adjudication waits for whichever is slower.
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
-                pool.submit(run_review, "Q3  reading", "opus", "Claude Opus", 4096): "opus",
+                pool.submit(run_review, "Q4  reading", "opus", "Claude Opus", 4096): "opus",
                 pool.submit(
-                    run_review, "Q3  reading", "openai", "OpenAI GPT-6 Astra", 4096
+                    run_review, "Q4  reading", "openai", "OpenAI GPT-6 Astra", 4096
                 ): "openai",
             }
             for fut in as_completed(futures):
@@ -469,7 +537,7 @@ class Agent:
 
         # Adjudication: Sonnet compares the two reviews.
         adjudication = self._model(
-            "Q3  adjudication",
+            "Q4  adjudication",
             "sonnet",
             "Claude Sonnet",
             Q.ADJUDICATE_SYSTEM,
@@ -489,7 +557,7 @@ class Agent:
     # OpenAPI target (build_kb.web_tools_openapi_schema()) -- NOT a free-form URL.
     # The Gateway validates arguments against that schema, so this dict and the
     # schema have to agree.  Dotted names are the registry's real wire names.
-    _Q4_WEB_FETCH_ARGS = {
+    _Q5_WEB_FETCH_ARGS = {
         "query.term": "PCSK9",
         "filter.overallStatus": "RECRUITING,NOT_YET_RECRUITING",
         "pageSize": 5,
@@ -497,7 +565,7 @@ class Agent:
         "countTotal": True,
     }
 
-    def question_4(self) -> None:
+    def question_5(self) -> None:
         """Beat 4: Cedar policy denies web_fetch; agent falls back to the knowledge base.
 
         Demo story: "Even with an external tool configured, a Cedar policy
@@ -533,12 +601,12 @@ class Agent:
         Note: Cedar policy denials arrive as HTTP 200 with a JSON-RPC error
         body, not as HTTP 403.  query_gateway() in aws.py handles this.
         """
-        self.emit({"type": "question", "n": 4, "text": Q.QUESTIONS[3]})
+        self.emit({"type": "question", "n": 5, "text": Q.QUESTIONS[4]})
         self.emit({"type": "phase", "label": "querying AgentCore Gateway for clinical trial data"})
 
         # Attempt the web_fetch tool call through the Gateway.
         # With the ForbidWeb Cedar policy in ENFORCE mode, this will be denied.
-        result = self.backend.query_gateway("web_fetch", dict(self._Q4_WEB_FETCH_ARGS))
+        result = self.backend.query_gateway("web_fetch", dict(self._Q5_WEB_FETCH_ARGS))
 
         if result.get("denied"):
             # Cedar policy blocked the request -- show the denial badge.
@@ -549,7 +617,7 @@ class Agent:
                     "label": "web access denied by Cedar policy — answering from knowledge base",
                 }
             )
-            text = self._q4_from_kb("web_fetch was denied by policy.")
+            text = self._q5_from_kb("web_fetch was denied by policy.")
         elif result.get("error"):
             # Not a policy decision.  Report it in the open -- a missing or FAILED
             # "web-tools" target lands here, and that is precisely the condition
@@ -565,29 +633,29 @@ class Agent:
                     ),
                 }
             )
-            text = self._q4_from_kb(f"web_fetch could not be called: {reason}")
+            text = self._q5_from_kb(f"web_fetch could not be called: {reason}")
         else:
             # web_fetch succeeded -- the policy is not in ENFORCE mode (or was
             # removed).  Use the live trial data; the beat's security point is
             # simply not being made on this run.
             self.emit({"type": "phase", "label": "reading the trial data returned by the Gateway"})
             trial_data = str(result.get("result", ""))[:2000]  # cap to avoid huge prompts
-            chunks = self._retrieve("Q4  retrieval", Q.QUESTIONS[3], n=8)
+            chunks = self._retrieve("Q5  retrieval", Q.QUESTIONS[4], n=8)
             text = self._model(
-                "Q4  synthesis",
+                "Q5  synthesis",
                 "haiku",
                 "Claude Haiku",
                 Q.Q4_GATEWAY_SYSTEM,
                 (
                     f"Trial data:\n{trial_data}\n\n"
                     f"Passages:\n{self._context(chunks)}\n\n"
-                    f"Question: {Q.QUESTIONS[3]}"
+                    f"Question: {Q.QUESTIONS[4]}"
                 ),
             )
 
         self.emit({"type": "answer", "title": "Clinical trials  ·  Claude Haiku", "text": text})
 
-    def _q4_from_kb(self, note: str) -> str:
+    def _q5_from_kb(self, note: str) -> str:
         """Answer Q4 from the knowledge base alone, telling the model why.
 
         Shared by both no-web-data paths (policy denial and gateway error) so the
@@ -600,14 +668,14 @@ class Agent:
         Returns:
             The synthesised answer text.
         """
-        chunks = self._retrieve("Q4  retrieval", Q.QUESTIONS[3], n=12)
+        chunks = self._retrieve("Q5  retrieval", Q.QUESTIONS[4], n=12)
         self.emit({"type": "retrieval", "count": len(chunks)})
         return self._model(
-            "Q4  synthesis",
+            "Q5  synthesis",
             "haiku",
             "Claude Haiku",
             Q.Q4_GATEWAY_SYSTEM,
-            (f"Note: {note}\n\nPassages:\n{self._context(chunks)}\n\nQuestion: {Q.QUESTIONS[3]}"),
+            (f"Note: {note}\n\nPassages:\n{self._context(chunks)}\n\nQuestion: {Q.QUESTIONS[4]}"),
         )
 
     # -- free-form: route then dispatch ----------------------------------
@@ -630,9 +698,9 @@ class Agent:
         self.emit({"type": "route", "path": path, "label": ROUTE_LABELS[path]})
 
         dispatch = {
-            "SYNTHESIS": self.question_1,
-            "ANALYSIS": self.question_2,
-            "DEBATE": self.question_3,
+            "SYNTHESIS": self.question_2,
+            "ANALYSIS": self.question_3,
+            "DEBATE": self.question_4,
         }
         dispatch[path](text)
         self.emit({"type": "receipt", **self.meter.receipt()})
@@ -640,7 +708,7 @@ class Agent:
 
     # -- run (canned questions) -----------------------------------------
 
-    def run(self, which: Sequence[int] = (1, 2, 3, 4)) -> None:
+    def run(self, which: Sequence[int] = (1, 2, 3, 4, 5)) -> None:
         """Run one or more canned questions and emit the final receipt.
 
         The setup_cost event is emitted first so the browser can populate
@@ -648,7 +716,7 @@ class Agent:
 
         Args:
             which: a sequence of question numbers (1-4) to run.
-                   Default is (1, 2, 3, 4) -- all four demo beats.  Q4 used to be
+                   Default is (1, 2, 3, 4, 5) -- all five demo beats.  Q5 used to be
                    excluded by default, which meant the Cedar beat never ran
                    unless it was asked for by name; "Run complete" belongs after
                    Q4, not after Q3.
@@ -662,6 +730,7 @@ class Agent:
             2: self.question_2,
             3: self.question_3,
             4: self.question_4,
+            5: self.question_5,
         }
         for n in which:
             steps[n]()

@@ -51,9 +51,9 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--questions",
-        default="1,2,3,4",
+        default="1,2,3,4,5",
         metavar="N[,N]",
-        help="Comma-separated question numbers to run (default: 1,2,3,4).",
+        help="Comma-separated question numbers to run (default: 1,2,3,4,5).",
     )
     return p.parse_args()
 

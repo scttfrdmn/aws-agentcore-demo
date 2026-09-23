@@ -735,6 +735,7 @@ const MODEL_ROLES = {
 
 const TELETYPE_CPS = 60;
 const CHIP_SHORTS  = [
+  'What does PCSK9 do?',
   'Role of PCSK9 in LDL regulation',
   'Compare trials & chart',
   'Where does literature disagree?',
@@ -803,8 +804,11 @@ function demo() {
       // "Run complete" fires after all FOUR canned questions are answered.
       // Renamed from allThreeDone on 2026-09-22: the logic already required 4
       // (beat 4 is the Cedar policy demo), only the name still said three.
-      return this.canned.length === 4 && this.canned.every(c => c.fired)
-          && this._doneMsgIds.size >= 4;
+      // Five beats since 2026-09-22 (a plain opener was added before the
+      // guardrail beat).  Derived from canned.length so /api/questions stays
+      // the single source of truth for how many beats there are.
+      const n = this.canned.length;
+      return n > 0 && this.canned.every(c => c.fired) && this._doneMsgIds.size >= n;
     },
 
     // ── init ───────────────────────────────────────────────────

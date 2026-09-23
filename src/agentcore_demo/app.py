@@ -264,13 +264,13 @@ async def serve_corpus_doc(pmcid: str):
 
 @app.get("/api/questions")
 async def get_questions() -> JSONResponse:
-    """Return the four locked question texts.
+    """Return the five locked question texts.
 
     The browser uses these to populate the canned question chips and to
     teletype-animate the full question text into the input field before
     firing the WebSocket request.
 
-    Response: {"questions": ["Q1 text", "Q2 text", "Q3 text", "Q4 text"]}
+    Response: {"questions": ["Q1 text", ... "Q5 text"]}
     """
     from agentcore_demo import questions as Q  # noqa: PLC0415
 
@@ -326,7 +326,7 @@ async def websocket_ingest(ws: WebSocket) -> None:
 @app.websocket("/ws")
 async def websocket_run(
     ws: WebSocket,
-    q: int | None = Query(default=None, ge=1, le=4),
+    q: int | None = Query(default=None, ge=1, le=5),
     text: str | None = Query(default=None),
 ) -> None:
     """Run the agent and forward every event as JSON over the WebSocket.
@@ -366,7 +366,7 @@ async def websocket_run(
         if text:
             await asyncio.to_thread(_run_freeform, backend, meter, emit, stop_event, text)
         else:
-            which = (q,) if q is not None else (1, 2, 3, 4)
+            which = (q,) if q is not None else (1, 2, 3, 4, 5)
             await asyncio.to_thread(_run_agent, backend, meter, emit, stop_event, which)
     except WebSocketDisconnect:
         stop_event.set()  # signal the agent thread to stop emitting
@@ -381,7 +381,7 @@ def _run_agent(
     meter: CostMeter,
     emit,
     stop_event: threading.Event,
-    which: tuple[int, ...] = (1, 2, 3, 4),
+    which: tuple[int, ...] = (1, 2, 3, 4, 5),
 ) -> None:
     """Run canned questions through the Agent.  Called in a thread pool."""
 
