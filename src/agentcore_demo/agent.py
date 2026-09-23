@@ -171,7 +171,24 @@ class Agent:
         """
         self.emit({"type": "model", "tier": tier, "label": label, "state": "start"})
         t0 = time.monotonic()
-        text, usage, matches = self.backend.converse(tier, system, prompt, max_tokens)
+        # thinking="disabled" on EVERY model call in this demo (2026-09-22).
+        #
+        # Nothing here ever renders a thinking block -- thinking.display defaults
+        # to "omitted" on the Claude 5 models, so the audience sees none of it.
+        # Leaving it on therefore buys nothing and costs three ways: latency,
+        # output-token charges, and the output budget itself.  That last one is
+        # not theoretical:
+        #   - Q3, Opus 5, max_tokens=8192: 108s and the review was truncated at
+        #     exactly 8192 because thinking ate the budget.
+        #   - Q2, Sonnet 5, max_tokens=4096: returned ONLY a reasoningContent
+        #     block and NO text at all -- zero lines of analysis code.  Caught
+        #     by the guard in aws.py::converse rather than silently charting
+        #     nothing, but fatal to the beat either way.
+        # Opus 4.7 ran without thinking unless asked, which is why none of this
+        # was a problem before the Sept 2026 model refresh.
+        text, usage, matches = self.backend.converse(
+            tier, system, prompt, max_tokens, thinking="disabled"
+        )
         elapsed = round(time.monotonic() - t0, 1)
 
         cost = self.meter.add_llm(step, tier, label, usage)

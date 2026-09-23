@@ -456,14 +456,41 @@ def ingest(kb_id: str, ds_id: str) -> None:
         )["ingestionJob"]
         print(f"    status: {st['status']}")
 
-        if st["status"] in ("COMPLETE", "FAILED"):
-            if st["status"] == "COMPLETE":
-                s = st.get("statistics", {})
-                print(
-                    f"    indexed {s.get('numberOfNewDocumentsIndexed')} "
-                    f"of {s.get('numberOfDocumentsScanned')} documents"
+        if st["status"] == "COMPLETE":
+            stats = st.get("statistics", {})
+            indexed = stats.get("numberOfNewDocumentsIndexed")
+            scanned = stats.get("numberOfDocumentsScanned")
+            print(f"    indexed {indexed} of {scanned} documents")
+            # A COMPLETE job that indexed nothing is not a success.  Most often
+            # the S3 prefix is empty because the corpus was never synced up.
+            if not indexed:
+                raise RuntimeError(
+                    f"Ingestion reported COMPLETE but indexed {indexed} documents. "
+                    f"The knowledge base is EMPTY and the demo will retrieve nothing.\n"
+                    f"Most likely s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} has no objects "
+                    f"-- run `make corpus`, then upload it:\n"
+                    f"  aws s3 sync corpus/ s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} "
+                    f"--region {cfg.REGION}"
                 )
             break
+
+        if st["status"] == "FAILED":
+            # Fatal, deliberately (2026-09-22).  This used to `break` and fall
+            # through to printing an ingestion COST ESTIMATE and "Done", so a
+            # failed job looked like a successful build: you got an empty
+            # knowledge base and no indication anything was wrong until the
+            # demo retrieved nothing on stage.  Found by a full teardown ->
+            # rebuild cycle where the corpus had not been synced to S3, and
+            # Bedrock failed with "The specified bucket does not exist".
+            reasons = st.get("failureReasons") or ["(no failureReasons returned)"]
+            raise RuntimeError(
+                "Ingestion job FAILED -- the knowledge base is empty.\n  "
+                + "\n  ".join(str(r) for r in reasons)
+                + f"\nCheck that s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} exists and "
+                f"contains the corpus (`aws s3 sync corpus/ "
+                f"s3://{cfg.BUCKET}/{cfg.CORPUS_PREFIX} --region {cfg.REGION}`)."
+            )
+
         time.sleep(15)
 
 
