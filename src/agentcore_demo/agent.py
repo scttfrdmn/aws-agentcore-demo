@@ -82,32 +82,89 @@ Emit = Callable[[dict], None]
 
 # Human-readable descriptions for each routing path.
 # These appear in the "route" event label field and in the UI.
-# Display names for each model tier, versions included.
+# Display names, keyed by the model ID that ACTUALLY RAN -- not by tier.
 #
-# One dict so the receipt, the model rows and the route labels can never disagree
-# with each other.  Versions are shown deliberately (2026-09-22): the OpenAI
-# entry always carried one ("GPT-6 Astra") while the Anthropic ones did not, so a
-# projected receipt read "Claude Opus" beside "OpenAI GPT-6 Astra" and invited
-# the question "which Opus?".  On a slide about frontier models, the generation
-# is the interesting part.
+# Versions are shown deliberately (2026-09-22): the OpenAI entry always carried
+# its generation ("GPT-6 Astra") while the Anthropic ones did not, so a projected
+# receipt read "Claude Opus" beside "OpenAI GPT-6 Astra" and invited "which
+# Opus?".  On a slide about frontier models the generation is the point.
 #
-# These MUST match the model IDs in config.MODELS.  They are not derived from it
-# because config.py is git-ignored and absent in CI, so nothing here can import
-# it; test_model_labels_look_versioned() in tests/test_agent.py is the guard.
-MODEL_LABELS = {
-    "haiku": "Claude Haiku 4.5",
-    "sonnet": "Claude Sonnet 5",
-    "opus": "Claude Opus 5",
-    "openai": "OpenAI GPT-6 Astra",
+# Keyed by model ID rather than by tier ON PURPOSE.  A tier is a slot ("opus");
+# the label has to describe whatever is currently IN that slot.  An earlier
+# version mapped tier -> label, which meant repointing config.MODELS at a
+# different model left the receipt confidently displaying the old name.  That
+# matters because this repo gets cloned onto other machines, where config.py is
+# recreated from config.example.py and may well be edited for model access or
+# region reasons.  Now the label follows the model, and an unknown model degrades
+# to its own ID rather than to a lie.
+#
+# Entries beyond the four in use are kept so that swapping a model in config.py
+# produces a good label immediately.
+MODEL_DISPLAY_NAMES = {
+    "anthropic.claude-haiku-4-5": "Claude Haiku 4.5",
+    "anthropic.claude-sonnet-4-6": "Claude Sonnet 4.6",
+    "anthropic.claude-sonnet-5": "Claude Sonnet 5",
+    "anthropic.claude-opus-4-7": "Claude Opus 4.7",
+    "anthropic.claude-opus-4-8": "Claude Opus 4.8",
+    "anthropic.claude-opus-5": "Claude Opus 5",
+    "anthropic.claude-opus-5-5": "Claude Opus 5.5",
+    "anthropic.claude-fable-5": "Claude Fable 5",
+    "anthropic.claude-fable-5-1": "Claude Fable 5.1",
+    "openai.gpt-6-astra": "OpenAI GPT-6 Astra",
+    "openai.gpt-5.6-sol": "OpenAI GPT-5.6 Sol",
+    "openai.gpt-5.6-terra": "OpenAI GPT-5.6 Terra",
+    "amazon.nova-pro": "Amazon Nova Pro",
 }
 
-ROUTE_LABELS = {
-    "SYNTHESIS": f"retrieval + synthesis · {MODEL_LABELS['haiku']}",
-    "ANALYSIS": f"code generation + chart · {MODEL_LABELS['sonnet']} + Code Interpreter",
-    "DEBATE": (
-        f"dual review + adjudication · {MODEL_LABELS['opus']} "
-        f"+ {MODEL_LABELS['openai']} + {MODEL_LABELS['sonnet']}"
-    ),
+# Cross-Region inference prefixes that carry no information about WHICH model
+# ran, only about where it ran.  Stripped before lookup.
+_GEO_PREFIXES = ("us.", "eu.", "au.", "global.")
+
+
+def model_stem(model_id: str) -> str:
+    """Reduce a Bedrock model ID to the part that identifies the model.
+
+    Strips the cross-Region prefix and the dated/versioned tail, both of which
+    vary without the model changing:
+
+        us.anthropic.claude-haiku-4-5-20251001-v1:0 -> anthropic.claude-haiku-4-5
+        global.anthropic.claude-opus-5              -> anthropic.claude-opus-5
+        us.openai.gpt-6-astra                       -> openai.gpt-6-astra
+    """
+    stem = model_id
+    for prefix in _GEO_PREFIXES:
+        if stem.startswith(prefix):
+            stem = stem[len(prefix) :]
+            break
+    stem = stem.split(":", 1)[0]  # drop ":0"
+    # Drop a trailing "-vN" and a trailing "-YYYYMMDD" date, in either order.
+    parts = stem.split("-")
+    while parts and (
+        (parts[-1].startswith("v") and parts[-1][1:].isdigit())
+        or (len(parts[-1]) == 8 and parts[-1].isdigit())
+    ):
+        parts.pop()
+    return "-".join(parts)
+
+
+def model_label(model_id: str) -> str:
+    """Human label for a model ID, or the ID's own stem if we don't know it.
+
+    Falling back to the stem is deliberate: an unrecognised model shows up as
+    something like "anthropic.claude-opus-9" -- ugly, obviously raw, and TRUE.
+    The alternative (a stale curated name) would be a quiet lie on a slide whose
+    entire claim is that the numbers and models shown are the real ones.
+    """
+    stem = model_stem(model_id)
+    return MODEL_DISPLAY_NAMES.get(stem, stem)
+
+
+# Route descriptions are templates: the model names are filled in from whatever
+# is configured, for the same reason as above.
+ROUTE_LABEL_TEMPLATES = {
+    "SYNTHESIS": "retrieval + synthesis · {haiku}",
+    "ANALYSIS": "code generation + chart · {sonnet} + Code Interpreter",
+    "DEBATE": "dual review + adjudication · {opus} + {openai} + {sonnet}",
 }
 
 
@@ -123,6 +180,26 @@ class Agent:
         self.backend = backend
         self.meter = meter
         self.emit = emit
+
+    def _label(self, tier: str) -> str:
+        """Display name for whatever model is configured in `tier`.
+
+        Reads the backend's model map so the label always describes the model
+        that actually ran.  Falls back to the tier key if the backend does not
+        expose a map at all, which is honest rather than wrong.
+        """
+        models = getattr(self.backend, "models", None) or {}
+        model_id = models.get(tier)
+        return model_label(model_id) if model_id else tier
+
+    def _route_label(self, path: str) -> str:
+        """Fill a route template with the live model names."""
+        return ROUTE_LABEL_TEMPLATES[path].format(
+            haiku=self._label("haiku"),
+            sonnet=self._label("sonnet"),
+            opus=self._label("opus"),
+            openai=self._label("openai"),
+        )
 
     # -- helpers ---------------------------------------------------------
 
@@ -335,7 +412,7 @@ class Agent:
         # Take the first word and upper-case it.  If it's not a valid path,
         # default to SYNTHESIS (the safest, lowest-cost fallback).
         word = raw.strip().upper().split()[0] if raw.strip() else "SYNTHESIS"
-        if word not in ROUTE_LABELS:
+        if word not in ROUTE_LABEL_TEMPLATES:
             word = "SYNTHESIS"
         return word
 
@@ -366,7 +443,7 @@ class Agent:
         answer = self._model(
             "Q1  synthesis",
             "haiku",
-            MODEL_LABELS["haiku"],
+            self._label("haiku"),
             Q.PLAIN_SYSTEM,
             f"Passages:\n{self._context(chunks)}\n\n{text}",
             max_tokens=1200,
@@ -394,7 +471,7 @@ class Agent:
         result = self._model(
             "Q2  synthesis",
             "haiku",
-            MODEL_LABELS["haiku"],
+            self._label("haiku"),
             Q.SYNTHESIS_SYSTEM,
             f"Passages:\n{self._context(chunks)}\n\nQuestion: {text}",
         )
@@ -427,7 +504,7 @@ class Agent:
         code = self._model(
             "Q3  code generation",
             "sonnet",
-            MODEL_LABELS["sonnet"],
+            self._label("sonnet"),
             Q.CODEGEN_SYSTEM,
             f"Passages:\n{self._context(chunks)}",
             max_tokens=4096,
@@ -548,9 +625,9 @@ class Agent:
         # it finishes, so the adjudication waits for whichever is slower.
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
-                pool.submit(run_review, "Q4  reading", "opus", MODEL_LABELS["opus"], 4096): "opus",
+                pool.submit(run_review, "Q4  reading", "opus", self._label("opus"), 4096): "opus",
                 pool.submit(
-                    run_review, "Q4  reading", "openai", MODEL_LABELS["openai"], 4096
+                    run_review, "Q4  reading", "openai", self._label("openai"), 4096
                 ): "openai",
             }
             for fut in as_completed(futures):
@@ -561,11 +638,11 @@ class Agent:
         adjudication = self._model(
             "Q4  adjudication",
             "sonnet",
-            MODEL_LABELS["sonnet"],
+            self._label("sonnet"),
             Q.ADJUDICATE_SYSTEM,
-            f"REVIEW A ({MODEL_LABELS['opus']}):\n"
+            f"REVIEW A ({self._label('opus')}):\n"
             f"{results['opus']}\n\n"
-            f"REVIEW B ({MODEL_LABELS['openai']}):\n{results['openai']}",
+            f"REVIEW B ({self._label('openai')}):\n{results['openai']}",
             4096,
         )
         self.emit(
@@ -666,7 +743,7 @@ class Agent:
             text = self._model(
                 "Q5  synthesis",
                 "haiku",
-                MODEL_LABELS["haiku"],
+                self._label("haiku"),
                 Q.Q4_GATEWAY_SYSTEM,
                 (
                     f"Trial data:\n{trial_data}\n\n"
@@ -695,7 +772,7 @@ class Agent:
         return self._model(
             "Q5  synthesis",
             "haiku",
-            MODEL_LABELS["haiku"],
+            self._label("haiku"),
             Q.Q4_GATEWAY_SYSTEM,
             (f"Note: {note}\n\nPassages:\n{self._context(chunks)}\n\nQuestion: {Q.QUESTIONS[4]}"),
         )
@@ -717,7 +794,7 @@ class Agent:
         """
         self.emit({"type": "phase", "label": "classifying question…"})
         path = self.route(text)
-        self.emit({"type": "route", "path": path, "label": ROUTE_LABELS[path]})
+        self.emit({"type": "route", "path": path, "label": self._route_label(path)})
 
         dispatch = {
             "SYNTHESIS": self.question_2,

@@ -129,6 +129,17 @@ class FakeBackend:
         # 0 = instant (for tests); 0.3 = visible animation (for make demo-fake-ingest).
         self._ingest_delay: float = float(os.environ.get("DEMO_FAKE_INGEST_DELAY", "0"))
 
+        # The model IDs a real run would use.  Present so that Agent._label()
+        # takes the SAME code path in tests as in production -- labels are derived
+        # from this map, so a fake without it would silently exercise the
+        # fallback branch instead.  Kept in step with config.example.py.
+        self.models: dict[str, str] = {
+            "haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "sonnet": "us.anthropic.claude-sonnet-5",
+            "opus": "us.anthropic.claude-opus-5",
+            "openai": "us.openai.gpt-6-astra",
+        }
+
         # Which of query_gateway()'s three outcomes to return for web_fetch.
         # Default "denied" is the rehearsed beat-4 path; tests override it to
         # reach the "error" and "result" branches.  See query_gateway() below.

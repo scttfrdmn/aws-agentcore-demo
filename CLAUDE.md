@@ -306,6 +306,32 @@ real deletion has run through this code path. The cheapest closing check is
 branches stamp the tags) then `make teardown-dry-run` — every line should read
 `[config, tag, name]`.
 
+## Model labels follow the model, not the slot
+
+`agent.py` derives every displayed model name from the model ID that actually
+ran — `MODEL_DISPLAY_NAMES` is keyed by model-ID *stem*, and `model_label()`
+resolves it after `model_stem()` strips the `us.`/`global.` prefix and any
+dated/`-vN` tail. `Agent._label(tier)` reads `backend.models[tier]`, so
+repointing `config.MODELS` at a different model changes the receipt, the model
+rows, the route labels and the Q4 adjudication prompt together.
+
+Why it is not a tier→label map (it was, briefly): a tier is a slot. Mapping
+`"opus" → "Claude Opus 5"` meant swapping the model left the receipt confidently
+showing the old name — a quiet lie on a slide whose entire claim is that the
+numbers and models shown are real. That matters because this repo gets cloned
+onto other machines, where `config.py` is recreated from `config.example.py` and
+may be edited for model access or region reasons.
+
+An unrecognised model falls back to its own stem (e.g.
+`anthropic.claude-opus-99`) — ugly, obviously raw, and true. Do not "improve"
+that into a guessed name.
+
+`tests/test_agent.py::test_every_shipped_model_id_has_a_versioned_label` parses
+**`config.example.py`** (tracked, so present in CI and in a fresh clone) and
+fails if a shipped default names a model with no curated label. If you change a
+model in `config.example.py`, add its `MODEL_DISPLAY_NAMES` entry in the same
+commit.
+
 ## Guardrails — do not violate
 
 - **No console.** Everything is scripted. Don't add "go click in the AWS console"

@@ -2,7 +2,7 @@
 test_agent.py  --  drive Agent with the FakeBackend and assert event-stream correctness.
 """
 
-from agentcore_demo.agent import ROUTE_LABELS, Agent
+from agentcore_demo.agent import ROUTE_LABEL_TEMPLATES, Agent
 from agentcore_demo.fakes import FAKE_KB_SETUP_COSTS
 
 
@@ -175,7 +175,7 @@ def test_receipt_rows_have_no_estimated_field(backend, meter):
 def test_route_returns_valid_path(backend, meter):
     agent = Agent(backend, meter, lambda e: None)
     path = agent.route("What is PCSK9?")
-    assert path in ROUTE_LABELS
+    assert path in ROUTE_LABEL_TEMPLATES
 
 
 def test_route_synthesis_for_generic_question(backend, meter):
@@ -212,8 +212,10 @@ def test_run_freeform_emits_route_event(backend, meter):
 
     route_events = [e for e in events if e["type"] == "route"]
     assert len(route_events) == 1
-    assert route_events[0]["path"] in ROUTE_LABELS
-    assert route_events[0]["label"] == ROUTE_LABELS[route_events[0]["path"]]
+    assert route_events[0]["path"] in ROUTE_LABEL_TEMPLATES
+    # The label is the template filled with the live model names.
+    expected = Agent(backend, meter, lambda e: None)._route_label(route_events[0]["path"])
+    assert route_events[0]["label"] == expected
 
 
 def test_run_freeform_ends_with_receipt_and_done(backend, meter):
@@ -324,24 +326,61 @@ def test_q1_is_a_plain_answer_with_no_guardrail_or_code(backend, meter):
     assert tiers == ["haiku", "haiku"], f"expected one Haiku call (start+done), got {tiers}"
 
 
-def test_model_labels_look_versioned_and_cover_every_tier():
-    """Every displayed model name must carry its version.
+def test_every_shipped_model_id_has_a_versioned_label():
+    """Every model in config.example.py must resolve to a curated, versioned name.
 
-    MODEL_LABELS cannot be derived from config.MODELS -- config.py is git-ignored
-    and absent in CI -- so this is the guard against the two ways it drifts:
-    a tier gets added without a label, or a label loses its version. The second
-    is what actually happened: "Claude Opus" sat next to "OpenAI GPT-6 Astra" on
-    a projected receipt and invited "which Opus?".
+    config.example.py is what a fresh clone copies to config.py, so this is the
+    guard that matters for running the demo on another machine: if the shipped
+    default names a model MODEL_DISPLAY_NAMES doesn't know, the receipt falls back
+    to a raw ID like "anthropic.claude-opus-9" on a projector.
+
+    It reads config.example.py rather than config.py deliberately -- config.py is
+    git-ignored and absent both in CI and in a fresh clone. The example IS tracked,
+    so this runs everywhere.
     """
-    from agentcore_demo.agent import MODEL_LABELS
-    from agentcore_demo.fakes import TEST_PRICING
+    import ast
+    from pathlib import Path
 
-    assert set(MODEL_LABELS) == set(TEST_PRICING), (
-        "MODEL_LABELS and the priced tiers disagree; a tier without a label would "
-        "show up on the receipt as a bare key."
+    from agentcore_demo.agent import MODEL_DISPLAY_NAMES, model_label, model_stem
+
+    src = (Path(__file__).resolve().parent.parent / "config.example.py").read_text()
+    tree = ast.parse(src)
+    models = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "MODELS" for t in node.targets)
     )
-    for tier, label in MODEL_LABELS.items():
-        assert any(c.isdigit() for c in label), (
-            f"label for tier {tier!r} is {label!r} -- no version in it. "
-            f"The audience should be able to tell which generation ran."
+
+    assert models, "could not find MODELS in config.example.py"
+    for tier, model_id in models.items():
+        stem = model_stem(model_id)
+        assert stem in MODEL_DISPLAY_NAMES, (
+            f"config.example.py tier {tier!r} names {model_id!r} (stem {stem!r}), "
+            f"which has no entry in MODEL_DISPLAY_NAMES -- the receipt would show "
+            f"the raw ID. Add it."
         )
+        label = model_label(model_id)
+        assert any(c.isdigit() for c in label), (
+            f"label for {model_id!r} is {label!r} -- no version in it. The audience "
+            f"should be able to tell which generation ran."
+        )
+
+
+def test_model_label_falls_back_to_the_raw_stem_not_a_stale_name():
+    """An unknown model must degrade to something obviously raw, never to a lie."""
+    from agentcore_demo.agent import model_label, model_stem
+
+    unknown = "us.anthropic.claude-opus-99-unreleased"
+    assert model_label(unknown) == model_stem(unknown) == "anthropic.claude-opus-99-unreleased"
+
+
+def test_model_stem_ignores_region_and_date_suffixes():
+    """Geo prefix and dated/versioned tails vary without the model changing."""
+    from agentcore_demo.agent import model_stem
+
+    assert (
+        model_stem("us.anthropic.claude-haiku-4-5-20251001-v1:0")
+        == model_stem("global.anthropic.claude-haiku-4-5")
+        == "anthropic.claude-haiku-4-5"
+    )
