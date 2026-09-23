@@ -26,7 +26,7 @@ What gets measured vs. what gets computed:
     separate setup_cost event.  They are NOT added to the run total.
 
 Thread safety:
-  Q3 runs Claude Opus and Amazon Nova Pro in parallel threads.  Both call
+  Q3 runs Claude Opus and OpenAI GPT-6 Astra in parallel threads.  Both call
   meter.add_llm() concurrently.  The CostMeter uses a threading.Lock around
   the rows list to prevent data races.  The lock is intentionally not a
   dataclass field that shows up in repr/eq (init=False, repr=False,
@@ -94,7 +94,7 @@ class CostMeter:
           + (outputTokens / 1,000,000) × per_out_rate
 
         Thread-safe: safe to call from multiple threads concurrently (Q3
-        calls this from both the Opus thread and the Nova thread).
+        calls this from both the Opus thread and the Astra thread).
 
         Args:
             step: receipt label for this step (e.g. "Q1  synthesis").

@@ -721,7 +721,7 @@ const MODEL_ROLES = {
   haiku:  'reads and cites',
   sonnet: 'writes analysis code / adjudicates',
   opus:   'independent expert review',
-  nova:   'independent expert review (second family)',
+  openai: 'independent expert review (second family)',
 };
 
 const TELETYPE_CPS = 60;
@@ -925,7 +925,7 @@ function demo() {
 
     // ── live timer for running models ──────────────────────────
     // Each running model row stores its own startedAt timestamp so parallel
-    // models (e.g. Opus + Nova in Q3) each show their own independent elapsed
+    // models (e.g. Opus + GPT-6 Astra in Q3) each show their own independent elapsed
     // time.  The interval reads per-row startedAt rather than a shared t0.
     _startTimers() {
       if (this._timerHandle) return;

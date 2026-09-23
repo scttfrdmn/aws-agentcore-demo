@@ -63,7 +63,7 @@ TEST_PRICING: dict[str, tuple[float, float]] = {
     "haiku": (0.80, 4.00),  # USD per 1M input, per 1M output tokens
     "sonnet": (3.00, 15.00),
     "opus": (15.00, 75.00),
-    "nova": (0.80, 3.20),
+    "openai": (12.00, 60.00),  # deliberately NOT Astra's real $11/$55
 }
 
 # KB retrieval rate used by CostMeter in tests.

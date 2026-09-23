@@ -26,7 +26,7 @@ The four demo beats and their model choices:
   Beat 2 -- "Real work, faster"
     Question: Compare the reported LDL-lowering effects across the clinical trials
               in this corpus, and chart them.
-    Model: Claude Sonnet 4.6 (for code generation) + AgentCore Code Interpreter
+    Model: Claude Sonnet 5 (for code generation) + AgentCore Code Interpreter
     Story: Sonnet writes Python analysis code; a Bedrock microVM executes it
            in isolation and returns a chart.  The code runs in the cloud,
            not on the demo laptop.
@@ -36,18 +36,29 @@ The four demo beats and their model choices:
   Beat 3 -- "A second opinion"
     Question: Where does the literature disagree about the off-target or adverse
               effects of PCSK9 inhibition, and what should be tested next?
-    Models: Claude Opus 4.7 AND Amazon Nova Pro (parallel) + Claude Sonnet adjudicates
+    Models: Claude Opus 5 AND OpenAI GPT-6 Astra (parallel) + Claude Sonnet adjudicates
     Story: The hardest question -- genuine scientific controversy.  Two frontier
            models from DIFFERENT companies read the same evidence independently.
            Sonnet then adjudicates: where do they agree, where do they disagree,
            and which disagreements are the highest-value next experiments.
-    Why Opus: Opus 4.7 is Anthropic's most capable reasoning model -- appropriate
-              for a question that requires careful evidence synthesis.
-    Why Nova Pro: Using a non-Anthropic model provides an independent second
-                  opinion and demonstrates that Bedrock gives you multi-model
-                  access within the same secure boundary.
+    Why Opus: Opus 5 is Anthropic's most advanced Opus model -- appropriate for a
+              question that requires careful evidence synthesis.  (Claude Fable 5.1
+              is more capable still, but it ships blocking classifiers for dual-use
+              life-sciences content with materially higher refusal rates, which is an
+              unacceptable risk for a live biomedical demo.  See CLAUDE.md.)
+    Why GPT-6 Astra: OpenAI's most capable model (launched 2026-09-08), so the
+                  second opinion is genuinely frontier-against-frontier rather
+                  than frontier-against-cheaper.  It demonstrates that Bedrock
+                  gives you multi-model access -- across rival vendors -- within
+                  the same secure boundary, which is the whole point of the beat.
+                  This replaced Amazon Nova Pro in September 2026, once OpenAI
+                  models became available on Bedrock.
     Why Sonnet for adjudication: Fast and accurate enough to compare two
                   expert reviews.  Opus would be unnecessary for this task.
+    Cost note: Astra is the most expensive model in this demo ($11/$55 per 1M
+                  tokens vs Opus at $5/$25), so Q3 dominates the receipt.  That
+                  is an honest and useful thing to show -- the audience sees the
+                  hardest question cost the most, and still well under a dollar.
 
   Beat 4 -- "Secure by policy"
     Question: Search ClinicalTrials.gov for ongoing trials testing the experiments
@@ -109,7 +120,7 @@ CODEGEN_SYSTEM = (
     "Output ONLY the code -- no prose, no markdown fences."
 )
 
-# System prompt for Q3 -- independent expert review (Claude Opus AND Amazon Nova Pro).
+# System prompt for Q3 -- independent expert review (Claude Opus AND OpenAI GPT-6 Astra).
 # Both models receive the SAME system prompt and the SAME passages.
 # The point is that two independent models may notice different things --
 # their disagreements highlight genuinely uncertain areas in the literature.

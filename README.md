@@ -17,7 +17,7 @@ a receipt at the end.
 |------|----------|--------|-----------------|
 | Q1 | Role of PCSK9 in LDL regulation | Claude Haiku | **Bedrock Guardrail** intercepts NCBI URLs → redirects to local corpus |
 | Q2 | Compare trial LDL-lowering + chart | Claude Sonnet + Code Interpreter | Isolated microVM for code execution |
-| Q3 | Where does the literature disagree? | Claude Opus + Amazon Nova Pro (parallel) + Sonnet adjudicates | **Bedrock Guardrail** (same as Q1) |
+| Q3 | Where does the literature disagree? | Claude Opus + OpenAI GPT-6 Astra (parallel) + Sonnet adjudicates | **Bedrock Guardrail** (same as Q1) |
 | Q4 | Search ClinicalTrials.gov for ongoing trials | Claude Haiku | **AgentCore Gateway Cedar policy** blocks web access |
 
 ---
@@ -26,7 +26,9 @@ a receipt at the end.
 
 - AWS account with Bedrock model access enabled in **us-west-2**
   (check: `aws bedrock list-inference-profiles --region us-west-2`)
-- Four models must be ACTIVE: Haiku 4.5, Sonnet 4.6, Opus 4.7, Nova Pro
+- Four models must be ACTIVE: Haiku 4.5, Sonnet 5, Opus 5, OpenAI GPT-6 Astra
+  (OpenAI models have no in-Region option on `bedrock-runtime` — the `us.`
+  cross-Region profile below is required, not optional)
 - An S3 bucket you own (e.g. `my-inside-the-lines-corpus`)
 - Python 3.11+ and [`uv`](https://github.com/astral-sh/uv)
 - AWS CLI configured with Bedrock, S3, IAM, and bedrock-agentcore-control permissions
@@ -59,9 +61,9 @@ BUCKET     = "my-corpus-bucket"  # an S3 bucket you own
 # IMPORTANT: Use US inference profile IDs (start with "us.")
 MODELS = {
     "haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "sonnet": "us.anthropic.claude-sonnet-4-6",
-    "opus": "us.anthropic.claude-opus-4-7",
-    "nova": "us.amazon.nova-pro-v1:0",
+    "sonnet": "us.anthropic.claude-sonnet-5",
+    "opus": "us.anthropic.claude-opus-5",
+    "openai": "us.openai.gpt-6-astra",
 }
 ```
 

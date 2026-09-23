@@ -51,14 +51,14 @@ def test_q2_emits_code_and_chart(backend, meter):
     assert any(e["tier"] == "sonnet" for e in model_events)
 
 
-def test_q3_runs_both_opus_and_nova(backend, meter):
+def test_q3_runs_both_opus_and_openai(backend, meter):
     events: list[dict] = []
     Agent(backend, meter, events.append).run(which=(3,))
 
     model_events = [e for e in events if e["type"] == "model"]
     tiers = [e["tier"] for e in model_events]
     assert "opus" in tiers
-    assert "nova" in tiers
+    assert "openai" in tiers
     assert "sonnet" in tiers
 
 
@@ -238,13 +238,13 @@ def test_run_freeform_analysis_path_emits_chart(backend, meter):
     assert any(e["type"] == "chart" for e in events)
 
 
-def test_run_freeform_debate_path_uses_opus_and_nova(backend, meter):
+def test_run_freeform_debate_path_uses_opus_and_openai(backend, meter):
     events: list[dict] = []
     Agent(backend, meter, events.append).run_freeform("Where does the literature disagree?")
 
     tiers = [e["tier"] for e in events if e["type"] == "model"]
     assert "opus" in tiers
-    assert "nova" in tiers
+    assert "openai" in tiers
 
 
 def test_model_events_have_guardrail_field_in_agent_run(backend, meter):

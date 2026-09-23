@@ -32,11 +32,20 @@ VECTOR_INDEX_NAME = "inside-the-lines-index"
 # IMPORTANT: Use US cross-region inference profile IDs (start with "us.")
 # Foundation model IDs (without "us." prefix) will fail with ValidationException.
 # Verify available profiles: aws bedrock list-inference-profiles --region us-west-2
+# "us." is US Geo cross-Region inference -- requests stay in US Regions.
 MODELS = {
     "haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "sonnet": "us.anthropic.claude-sonnet-4-6",
-    "opus": "us.anthropic.claude-opus-4-7",
-    "nova": "us.amazon.nova-pro-v1:0",  # the non-Claude cross-check
+    "sonnet": "us.anthropic.claude-sonnet-5",
+    "opus": "us.anthropic.claude-opus-5",
+    # The non-Anthropic cross-check for Q3.  OpenAI models arrived on Bedrock
+    # after this demo was first written; GPT-6 Astra is OpenAI's most capable
+    # model (launched 2026-09-08).  Same "us." convention as above, but note
+    # two OpenAI-specific facts (verified 2026-09-22):
+    #   - Unlike the Claude models, there is NO in-Region option on
+    #     bedrock-runtime -- a cross-Region profile is mandatory, not a choice.
+    #   - Geo and Global are priced DIFFERENTLY for OpenAI ($11/$55 vs
+    #     $10/$50 per 1M).  They are not interchangeable in PRICING below.
+    "openai": "us.openai.gpt-6-astra",
 }
 EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
 EMBED_DIM = 1024  # must match the vector index
@@ -44,16 +53,26 @@ EMBED_DIM = 1024  # must match the vector index
 # --- pricing ------------------------------------------------------------
 # USD per 1,000,000 tokens (input, output).
 # Source: AmazonBedrockFoundationModels Price List API (service code used
-# by pricing.get_products) + AmazonBedrock for Nova Pro.
-# Cross-region inference profile (Global) tier, us-west-2.
+# by pricing.get_products); OpenAI rates come from the Bedrock model card.
 # https://aws.amazon.com/bedrock/pricing/
-# NOTE: these are Bedrock prices, NOT Anthropic API prices (which differ).
-# Re-verify before the talk: aws s3 cp  / pricing API may have updated.
+# NOTE: these are Bedrock prices, NOT Anthropic/OpenAI first-party API prices
+# (which differ).  Re-verify before the talk; rates move.
+#
+# These must match the inference profiles in MODELS above -- all "us." (Geo).
+# For OpenAI that distinction is load-bearing: Geo is $11/$55 and Global is
+# $10/$50, so copying the wrong row understates the receipt by ~9%.
 PRICING = {
-    "haiku": (1.00, 5.00),  # Haiku 4.5  — Global cross-region inference
-    "sonnet": (3.00, 15.00),  # Sonnet 4.6 — Global cross-region inference
-    "opus": (5.00, 25.00),  # Opus 4.7   — Global cross-region inference
-    "nova": (0.80, 3.20),  # Nova Pro   — on-demand
+    "haiku": (1.00, 5.00),  # Haiku 4.5  — us. cross-region inference
+    "sonnet": (2.00, 10.00),  # Sonnet 5   — us. cross-region inference
+    "opus": (5.00, 25.00),  # Opus 5     — us. cross-region inference
+    # GPT-6 Astra, Standard tier, Geo CRIS, short context (<=272K input).
+    # Verified against the model card 2026-09-22.  Two caveats:
+    #   - Long context (>272K input tokens) is billed at a HIGHER rate
+    #     ($22/$82.50).  This demo retrieves ~16 passages, so it is always in
+    #     the short-context band -- but do not reuse this rate for big inputs.
+    #   - The in-Region/Geo price includes a 10% Bedrock fee over OpenAI's
+    #     own rates; no need to add it yourself.
+    "openai": (11.00, 55.00),  # GPT-6 Astra — us. Geo CRIS, short context
 }
 # AgentCore Code Interpreter: $0.0895/vCPU-hr + $0.00945/GB-hr (us-west-2).
 # Assuming 1 vCPU + 2 GB RAM; actual allocation not exposed via API.

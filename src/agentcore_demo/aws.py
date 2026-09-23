@@ -5,7 +5,7 @@ This module provides AwsBackend, the live implementation of the Backend
 protocol.  It wraps every AWS service call the agent needs:
 
   retrieve()             -> Bedrock Knowledge Bases vector search
-  converse()             -> Bedrock model invocation (Claude and Amazon Nova)
+  converse()             -> Bedrock model invocation (Claude and OpenAI)
   code_interpreter_run() -> AgentCore Code Interpreter (isolated microVM)
   kb_setup_costs()       -> one-time + monthly KB costs for the sidebar panel
   kb_is_ready()          -> check whether the KB has indexed documents
@@ -30,10 +30,27 @@ Verified AWS quirks (do not "fix" these without checking current docs):
     byte size for Titan Embed V2 (1024 float32 = 4096 bytes, plus ~512 bytes of
     metadata overhead per vector).  Labelled "from vector count" (not metered).
 
-  Claude Opus 4.7 inference config (2026-05-20):
-    temperature and topP are deprecated for Opus 4.7.  Passing them returns
-    HTTP 400.  The converse() call omits both; only maxTokens is set.
-    (This is why inferenceConfig only ever contains maxTokens in this file.)
+  Claude inference config (2026-05-20, re-checked 2026-09-22):
+    temperature and topP are deprecated on the current Claude models.  Passing
+    them returns HTTP 400.  The converse() call omits both; only maxTokens is
+    set.  (This is why inferenceConfig only ever contains maxTokens in this
+    file.)  Omitting them is also what makes the model set swappable: GPT-6
+    Astra and Claude Fable 5.1 both reject temperature too.
+
+  Adaptive thinking is ON by default (2026-09-22):
+    Claude Opus 5 and Sonnet 5 run adaptive thinking by default INCLUDING when
+    the request omits a "thinking" field -- which this file does.  Opus 4.7
+    behaved the opposite way (omitting it meant no thinking), so the Sept 2026
+    model bump silently turned thinking on.
+    Consequences to watch, in order of importance for a live demo:
+      1. Latency goes up.  Re-time the run before the talk.
+      2. Thinking tokens bill as OUTPUT tokens, so the receipt grows by more
+         than the headline rate change suggests.
+      3. Answer quality on Q3 should improve, which is why it is left on.
+    To turn it off if rehearsal timing demands, pass
+      additionalModelRequestFields={"thinking": {"type": "disabled"}}
+    to converse().  Both models accept that (Opus 5 caps effort at "high"
+    when thinking is disabled).  Deliberately NOT done here -- measure first.
 
   Cedar policy denial shape (2026-05-21):
     A Cedar ENFORCE denial comes back as HTTP 200 with a JSON-RPC error body
@@ -189,10 +206,15 @@ class AwsBackend:
     ) -> tuple[str, dict, list[dict]]:
         """Invoke a Bedrock foundation model and return text, token usage, and guardrail hits.
 
-        Uses the Bedrock Runtime converse() API, which works uniformly for
-        both Claude models and Amazon Nova -- the same request shape, the same
-        response shape.  This is the key Bedrock abstraction that makes it
-        easy to swap models.
+        Uses the Bedrock Runtime converse() API, which works uniformly across
+        vendors -- Claude and OpenAI take the same request shape and return the
+        same response shape.  This is the key Bedrock abstraction that makes it
+        easy to swap models, and it is why replacing Amazon Nova Pro with
+        OpenAI GPT-6 Astra in September 2026 needed no change to this function.
+
+        Converse is also the only API on which Bedrock Guardrails work with
+        OpenAI models, so the guardrail integration below depends on staying
+        here rather than moving to the Responses or Chat Completions APIs.
 
         Guardrail integration:
             If guardrail_id is set, the guardrail config is attached to every
@@ -202,12 +224,13 @@ class AwsBackend:
             so agent.py can substitute local corpus links.
 
         Important: temperature is intentionally omitted from inferenceConfig.
-            Claude Opus 4.7 rejects temperature in the request body (returns
+            The current Claude models reject temperature in the request body (return
             HTTP 400).  Using only maxTokens works for all models including
-            Haiku, Sonnet, Opus, and Nova Pro.  (Verified 2026-05-20.)
+            Haiku, Sonnet, Opus, and GPT-6 Astra.  (Verified 2026-05-20;
+            re-checked for Astra 2026-09-22.)
 
         Args:
-            tier: a key into self.models, e.g. "haiku", "sonnet", "opus", "nova".
+            tier: a key into self.models, e.g. "haiku", "sonnet", "opus", "openai".
             system: the system prompt text.
             prompt: the user message text.
             max_tokens: the maximum number of output tokens to generate.
@@ -223,7 +246,7 @@ class AwsBackend:
             "modelId": self.models[tier],
             "system": [{"text": system}],
             "messages": [{"role": "user", "content": [{"text": prompt}]}],
-            # temperature is deliberately absent -- Opus 4.7 rejects it.
+            # temperature is deliberately absent -- current models reject it.
             "inferenceConfig": {"maxTokens": max_tokens},
         }
         if self.guardrail_id:

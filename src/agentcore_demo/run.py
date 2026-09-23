@@ -219,7 +219,7 @@ def main() -> None:
 
     print(_HR)
     print(f"{'Inside the Lines — PCSK9':^{_WIDTH}}")
-    print(f"{'Bedrock Knowledge Base  ·  Claude + Nova':^{_WIDTH}}")
+    print(f"{'Bedrock Knowledge Base  ·  Claude + OpenAI':^{_WIDTH}}")
     print(_HR)
     print(f"  Started:   {datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(f"  Questions: {list(which)}")

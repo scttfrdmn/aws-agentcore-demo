@@ -63,11 +63,11 @@ class Backend(Protocol):
     ) -> tuple[str, dict, list[dict]]:
         """Invoke a Bedrock foundation model and return its response.
 
-        Works for both Claude (Haiku, Sonnet, Opus) and Amazon Nova Pro --
+        Works for both Claude (Haiku, Sonnet, Opus) and OpenAI GPT-6 Astra --
         the Bedrock converse() API accepts all of them with the same shape.
 
         Args:
-            tier: model tier key, e.g. "haiku", "sonnet", "opus", "nova".
+            tier: model tier key, e.g. "haiku", "sonnet", "opus", "openai".
             system: the system prompt text.
             prompt: the user message text.
             max_tokens: maximum number of output tokens.

@@ -13,7 +13,7 @@ this module.
 
 Why not just use config.PRICING for everything?
   config.PRICING holds the Bedrock model inference prices (Haiku, Sonnet,
-  Opus, Nova).  The embedding and S3 rates are different services and
+  Opus, GPT-6 Astra).  The embedding and S3 rates are different services and
   change on a different schedule.  Fetching them live at startup means the
   demo always shows current prices without needing a config update.
 
@@ -46,9 +46,22 @@ Verified AWS Price List quirks (do not "fix" without re-checking):
     The API returns USD per 1K tokens; we multiply by 1,000 to get per 1M.
     Live price: $0.02 / 1M tokens (on-demand, us-west-2) -- matches config.py.
 
-  Amazon Nova Pro pricing (2026-05-20):
-    Nova Pro pricing IS in "AmazonBedrock" ($0.80/$3.20 per 1M tokens, in/out).
-    These match the values in config.PRICING.
+  OpenAI GPT-6 Astra pricing (2026-09-22):
+    Astra replaced Amazon Nova Pro as the Q3 cross-check.  Its rates are taken
+    from the Bedrock model card, NOT the Price List API:
+      $11.00 / $55.00 per 1M tokens (in/out), Standard tier, Geo CRIS,
+      short context (<= 272K input tokens).
+    Three things to know before touching these numbers:
+      - Geo ("us." profile) and Global ("global." profile) are priced
+        differently ($11/$55 vs $10/$50).  config.MODELS uses "us.", so the
+        Geo row is the correct one.
+      - Inputs over 272K tokens bill at a higher long-context rate
+        ($22.00/$82.50).  This demo retrieves ~16 passages and never gets
+        close, but a cost model that assumed one flat rate would be wrong
+        for any larger workload.
+      - The quoted price already includes Bedrock's 10% fee over OpenAI's
+        own rates; do not add it again.
+    Astra is the most expensive model in the demo -- Q3 dominates the receipt.
 
   Region prefix convention:
     The Price List API uses regional usagetype prefixes that do NOT always match

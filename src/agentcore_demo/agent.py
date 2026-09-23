@@ -13,9 +13,9 @@ Tests provide an emit that collects events into a list for assertions.
 This module is the source of truth for the event protocol.  See CLAUDE.md
 for the full table; the EVENT TYPES comment below has the quick reference.
 
-How Q3 works (Opus + Nova run in parallel):
+How Q3 works (Opus + GPT-6 Astra run in parallel):
   Question 3 asks two model families to read the same evidence independently,
-  then a third model adjudicates where they disagree.  Opus and Nova read in
+  then a third model adjudicates where they disagree.  Both reviewers read in
   parallel using a ThreadPoolExecutor so the audience sees both models running
   at the same time.  A threading.Lock protects emit() because the two threads
   fire events concurrently.
@@ -81,7 +81,7 @@ Emit = Callable[[dict], None]
 ROUTE_LABELS = {
     "SYNTHESIS": "retrieval + synthesis · Claude Haiku",
     "ANALYSIS": "code generation + chart · Claude Sonnet + Code Interpreter",
-    "DEBATE": "dual review + adjudication · Opus + Nova + Sonnet",
+    "DEBATE": "dual review + adjudication · Opus + GPT-6 Astra + Sonnet",
 }
 
 
@@ -156,7 +156,7 @@ class Agent:
 
         Args:
             step: a label for this step on the receipt.
-            tier: model tier key ("haiku", "sonnet", "opus", "nova").
+            tier: model tier key ("haiku", "sonnet", "opus", "openai").
             label: human-readable model name for the UI.
             system: the system prompt text.
             prompt: the user message text.
@@ -297,7 +297,7 @@ class Agent:
         Demo story: "Real analytical work -- Sonnet reads the trial data,
         writes Python, and a Bedrock microVM executes it and returns a chart."
 
-        Model choice: Sonnet 4.6 -- the right size for code generation.  Haiku
+        Model choice: Sonnet 5 -- the right size for code generation.  Haiku
         would write simpler code; Opus would be slower and more expensive.
         Sonnet hits the sweet spot of quality and speed for live demos.
 
@@ -343,24 +343,32 @@ class Agent:
                 {"type": "answer", "title": "Code Interpreter output  ·  microVM", "text": clean}
             )
 
-    # -- Q3: the hard call -- Opus AND Nova run in parallel, then adjudicate
+    # -- Q3: the hard call -- Opus AND GPT-6 Astra in parallel, then adjudicate
 
     def question_3(self, text: str = Q.QUESTIONS[2]) -> None:
-        """Beat 3: Opus and Nova read evidence in parallel; Sonnet adjudicates.
+        """Beat 3: Opus and GPT-6 Astra read evidence in parallel; Sonnet adjudicates.
 
         Demo story: "For the hardest question -- where experts disagree --
         we run two frontier models from DIFFERENT companies in parallel and
         use a third model to find where they agree and disagree."
 
         Model choices:
-          - Claude Opus 4.7: Anthropic's most capable reasoning model.
-            max_tokens=8192 for a thorough review.
-          - Amazon Nova Pro: a non-Anthropic frontier model, providing
-            an independent second opinion.  max_tokens=4096 (Nova's limit).
-          - Claude Sonnet 4.6: the adjudicator.  Sonnet is fast and accurate
+          - Claude Opus 5: Anthropic's most advanced Opus model.
+          - OpenAI GPT-6 Astra: OpenAI's most capable model, and a genuinely
+            independent second opinion -- a different company's model family,
+            reached through the same Bedrock boundary.
+          - Claude Sonnet 5: the adjudicator.  Sonnet is fast and accurate
             enough to compare two reviews; Opus would be overkill here.
 
-        Threading: Opus and Nova call backend.converse() in parallel via
+        Both reviewers get max_tokens=8192 deliberately.  Giving one model a
+        smaller budget than the other would rig the comparison -- the shorter
+        review would look less thorough for a reason that has nothing to do
+        with the model.  (The previous Amazon Nova Pro reviewer was capped at
+        4096 because that was Nova's limit; Astra allows 128K, so the two can
+        now be held to the same budget.)  max_tokens is a ceiling, not a spend:
+        cost follows the tokens actually produced.
+
+        Threading: both reviewers call backend.converse() in parallel via
         ThreadPoolExecutor.  Since both calls emit events, we protect emit()
         with a threading.Lock (safe_emit) so events don't interleave at the
         character level.  CostMeter is also thread-safe (has its own lock).
@@ -373,7 +381,7 @@ class Agent:
         chunks = self._retrieve("Q3  retrieval", text, n=16)
         prompt = f"Passages:\n{self._context(chunks)}\n\n{text}"
 
-        # Thread-safe emit wrapper -- needed because Opus and Nova run in parallel.
+        # Thread-safe emit wrapper -- needed because both reviewers run in parallel.
         emit_lock = threading.Lock()
 
         def safe_emit(event: dict) -> None:
@@ -406,12 +414,14 @@ class Agent:
             safe_emit({"type": "cost", "total": round(self.meter.total, 6)})
             return tier, txt
 
-        # Run Opus and Nova concurrently.  as_completed() yields each future as
+        # Run both reviewers concurrently.  as_completed() yields each future as
         # it finishes, so the adjudication waits for whichever is slower.
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
                 pool.submit(run_review, "Q3  reading", "opus", "Claude Opus", 8192): "opus",
-                pool.submit(run_review, "Q3  reading", "nova", "Amazon Nova Pro", 4096): "nova",
+                pool.submit(
+                    run_review, "Q3  reading", "openai", "OpenAI GPT-6 Astra", 8192
+                ): "openai",
             }
             for fut in as_completed(futures):
                 tier, txt = fut.result()
@@ -425,7 +435,7 @@ class Agent:
             Q.ADJUDICATE_SYSTEM,
             "REVIEW A (Claude Opus):\n"
             f"{results['opus']}\n\n"
-            f"REVIEW B (Amazon Nova Pro):\n{results['nova']}",
+            f"REVIEW B (OpenAI GPT-6 Astra):\n{results['openai']}",
             4096,
         )
         self.emit(
