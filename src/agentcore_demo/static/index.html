@@ -384,6 +384,14 @@
     }
     .thinking-dot span:nth-child(2) { animation-delay: 0.2s; }
     .thinking-dot span:nth-child(3) { animation-delay: 0.4s; }
+    /* Caption beside the dots.  The dots alone made the audience ask "what is it
+       doing?" -- and the honest answer is "not AI yet".  Every string this can
+       show corresponds to a real milestone the browser has actually reached; we
+       do not advance it on a timer. */
+    .thinking-note {
+      margin-left: 0.6rem; font-size: 0.78rem; color: var(--muted);
+      font-family: "Atkinson Hyperlegible Mono", "Menlo", monospace;
+    }
     @keyframes thinkBounce {
       0%,60%,100% { transform: translateY(0);    opacity: 0.4; }
       30%          { transform: translateY(-7px); opacity: 1;   }
@@ -550,6 +558,7 @@
             <!-- thinking placeholder: shown immediately, disappears once real content arrives -->
             <div class="thinking-dot" x-show="!msg.phases.length && !msg.models.length && !msg.answer && !msg.routeLabel">
               <span></span><span></span><span></span>
+              <span class="thinking-note" x-text="msg.wsNote"></span>
             </div>
 
             <div class="route-tag" x-show="msg.routeLabel">
@@ -910,12 +919,24 @@ function demo() {
         id: msgId, text, cannedN, routeLabel: null,
         phases: [], models: [], code: null, chart: null, answer: null,
         receipt: null, guardrailActions: [], policyDenial: null,
+        // Caption for the bouncing dots.  Only ever set from a real event:
+        // creation -> onopen -> first server event (which hides the dots).
+        wsNote: 'opening WebSocket to the local agent',
       });
       this._scrollDown();
 
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/ws${wsParams}`);
 
+      // Real milestone, not a timer: the socket is up, so everything from here
+      // is the server building the backend and starting the agent.  On the FIRST
+      // question of a session that includes fetching live rates from the AWS
+      // Price List API inside _build_backend(); after that the backend is
+      // process-global and cached, so this note flashes by.
+      ws.onopen = () => {
+        const m = this.messages.find(x => x.id === msgId);
+        if (m) m.wsNote = 'agent starting · Bedrock clients + live pricing';
+      };
       ws.onmessage = (evt) => {
         try { this._handle(JSON.parse(evt.data), msgId); }
         catch (e) { console.error('bad event', e, evt.data); }

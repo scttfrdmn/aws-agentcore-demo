@@ -411,7 +411,11 @@ class Agent:
         agreements, disagreements, and the highest-value next experiments.
         """
         self.emit({"type": "question", "n": 3, "text": text})
-        self.emit({"type": "phase", "label": "retrieving"})
+        # Say WHERE from, like Q1 and Q2 do.  These phase lines are the only
+        # explanation the audience gets of what happens between clicking a
+        # question and a model timer appearing, so a bare "retrieving" wastes
+        # the one chance to say "this is a vector search over your own papers".
+        self.emit({"type": "phase", "label": "retrieving from the knowledge base"})
         chunks = self._retrieve("Q3  retrieval", text, n=16)
         prompt = f"Passages:\n{self._context(chunks)}\n\n{text}"
 
@@ -566,7 +570,7 @@ class Agent:
             # web_fetch succeeded -- the policy is not in ENFORCE mode (or was
             # removed).  Use the live trial data; the beat's security point is
             # simply not being made on this run.
-            self.emit({"type": "phase", "label": "processing clinical trial data"})
+            self.emit({"type": "phase", "label": "reading the trial data returned by the Gateway"})
             trial_data = str(result.get("result", ""))[:2000]  # cap to avoid huge prompts
             chunks = self._retrieve("Q4  retrieval", Q.QUESTIONS[3], n=8)
             text = self._model(
