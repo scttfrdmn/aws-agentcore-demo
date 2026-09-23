@@ -107,7 +107,7 @@ QUESTIONS = [
     "Q3 identified as priorities.",
 ]
 
-# System prompt for Q1 -- the plain opener (Claude Haiku).
+# System prompt for Q1 -- the plain opener (Claude Haiku 4.5).
 # Deliberately asks for BARE PMC IDs, not full NCBI URLs: with no external URL
 # in the output there is nothing for the Bedrock Guardrail to intercept, so this
 # beat shows a clean question-and-answer with no security badge competing for
@@ -121,7 +121,7 @@ PLAIN_SYSTEM = (
     "URLs or links of any kind -- the bracketed ID alone."
 )
 
-# System prompt for Q1 -- cited synthesis (Claude Haiku).
+# System prompt for Q2 -- cited synthesis (Claude Haiku 4.5).
 # We instruct the model to include full NCBI URLs so the Bedrock Guardrail
 # has something to intercept and anonymise.  The guardrail demo is only
 # visible if models actually produce external URLs.
@@ -138,7 +138,7 @@ SYNTHESIS_SYSTEM = (
     "(https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5481105/)"
 )
 
-# System prompt for Q2 -- analysis code generation (Claude Sonnet).
+# System prompt for Q3 -- analysis code generation (Claude Sonnet 5).
 # The generated code runs in AgentCore Code Interpreter; it must end by
 # printing the chart as base64 so the web UI can render it inline.
 # "Output ONLY the code" reduces the chance of Sonnet wrapping the code
@@ -155,7 +155,7 @@ CODEGEN_SYSTEM = (
     "Output ONLY the code -- no prose, no markdown fences."
 )
 
-# System prompt for Q3 -- independent expert review (Claude Opus AND OpenAI GPT-6 Astra).
+# System prompt for Q4 -- independent expert review (Claude Opus 5 AND OpenAI GPT-6 Astra).
 # Both models receive the SAME system prompt and the SAME passages.
 # The point is that two independent models may notice different things --
 # their disagreements highlight genuinely uncertain areas in the literature.
@@ -177,7 +177,7 @@ REVIEW_SYSTEM = (
     "sentence -- do not stop mid-thought."
 )
 
-# System prompt for Q3 -- adjudication (Claude Sonnet).
+# System prompt for Q4 -- adjudication (Claude Sonnet 5).
 # Sonnet receives both independent reviews and compares them.
 # "Be concise" keeps the adjudication short enough to fit on the demo slide.
 ADJUDICATE_SYSTEM = (
@@ -186,7 +186,7 @@ ADJUDICATE_SYSTEM = (
     "disagreements are the highest-value next experiments. Be concise."
 )
 
-# System prompt for Q4 -- Cedar Gateway tool demo (Claude Haiku).
+# System prompt for Q5 -- Cedar Gateway tool demo (Claude Haiku 4.5).
 # The agent will try to call web_fetch; when denied, it uses the knowledge base.
 # This prompt instructs it to explain what happened and answer from what it knows.
 Q4_GATEWAY_SYSTEM = (

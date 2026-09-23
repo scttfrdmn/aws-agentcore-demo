@@ -82,10 +82,32 @@ Emit = Callable[[dict], None]
 
 # Human-readable descriptions for each routing path.
 # These appear in the "route" event label field and in the UI.
+# Display names for each model tier, versions included.
+#
+# One dict so the receipt, the model rows and the route labels can never disagree
+# with each other.  Versions are shown deliberately (2026-09-22): the OpenAI
+# entry always carried one ("GPT-6 Astra") while the Anthropic ones did not, so a
+# projected receipt read "Claude Opus" beside "OpenAI GPT-6 Astra" and invited
+# the question "which Opus?".  On a slide about frontier models, the generation
+# is the interesting part.
+#
+# These MUST match the model IDs in config.MODELS.  They are not derived from it
+# because config.py is git-ignored and absent in CI, so nothing here can import
+# it; test_model_labels_look_versioned() in tests/test_agent.py is the guard.
+MODEL_LABELS = {
+    "haiku": "Claude Haiku 4.5",
+    "sonnet": "Claude Sonnet 5",
+    "opus": "Claude Opus 5",
+    "openai": "OpenAI GPT-6 Astra",
+}
+
 ROUTE_LABELS = {
-    "SYNTHESIS": "retrieval + synthesis · Claude Haiku",
-    "ANALYSIS": "code generation + chart · Claude Sonnet + Code Interpreter",
-    "DEBATE": "dual review + adjudication · Opus + GPT-6 Astra + Sonnet",
+    "SYNTHESIS": f"retrieval + synthesis · {MODEL_LABELS['haiku']}",
+    "ANALYSIS": f"code generation + chart · {MODEL_LABELS['sonnet']} + Code Interpreter",
+    "DEBATE": (
+        f"dual review + adjudication · {MODEL_LABELS['opus']} "
+        f"+ {MODEL_LABELS['openai']} + {MODEL_LABELS['sonnet']}"
+    ),
 }
 
 
@@ -344,7 +366,7 @@ class Agent:
         answer = self._model(
             "Q1  synthesis",
             "haiku",
-            "Claude Haiku",
+            MODEL_LABELS["haiku"],
             Q.PLAIN_SYSTEM,
             f"Passages:\n{self._context(chunks)}\n\n{text}",
             max_tokens=1200,
@@ -372,7 +394,7 @@ class Agent:
         result = self._model(
             "Q2  synthesis",
             "haiku",
-            "Claude Haiku",
+            MODEL_LABELS["haiku"],
             Q.SYNTHESIS_SYSTEM,
             f"Passages:\n{self._context(chunks)}\n\nQuestion: {text}",
         )
@@ -405,7 +427,7 @@ class Agent:
         code = self._model(
             "Q3  code generation",
             "sonnet",
-            "Claude Sonnet",
+            MODEL_LABELS["sonnet"],
             Q.CODEGEN_SYSTEM,
             f"Passages:\n{self._context(chunks)}",
             max_tokens=4096,
@@ -526,9 +548,9 @@ class Agent:
         # it finishes, so the adjudication waits for whichever is slower.
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
-                pool.submit(run_review, "Q4  reading", "opus", "Claude Opus", 4096): "opus",
+                pool.submit(run_review, "Q4  reading", "opus", MODEL_LABELS["opus"], 4096): "opus",
                 pool.submit(
-                    run_review, "Q4  reading", "openai", "OpenAI GPT-6 Astra", 4096
+                    run_review, "Q4  reading", "openai", MODEL_LABELS["openai"], 4096
                 ): "openai",
             }
             for fut in as_completed(futures):
@@ -539,11 +561,11 @@ class Agent:
         adjudication = self._model(
             "Q4  adjudication",
             "sonnet",
-            "Claude Sonnet",
+            MODEL_LABELS["sonnet"],
             Q.ADJUDICATE_SYSTEM,
-            "REVIEW A (Claude Opus):\n"
+            f"REVIEW A ({MODEL_LABELS['opus']}):\n"
             f"{results['opus']}\n\n"
-            f"REVIEW B (OpenAI GPT-6 Astra):\n{results['openai']}",
+            f"REVIEW B ({MODEL_LABELS['openai']}):\n{results['openai']}",
             4096,
         )
         self.emit(
@@ -644,7 +666,7 @@ class Agent:
             text = self._model(
                 "Q5  synthesis",
                 "haiku",
-                "Claude Haiku",
+                MODEL_LABELS["haiku"],
                 Q.Q4_GATEWAY_SYSTEM,
                 (
                     f"Trial data:\n{trial_data}\n\n"
@@ -673,7 +695,7 @@ class Agent:
         return self._model(
             "Q5  synthesis",
             "haiku",
-            "Claude Haiku",
+            MODEL_LABELS["haiku"],
             Q.Q4_GATEWAY_SYSTEM,
             (f"Note: {note}\n\nPassages:\n{self._context(chunks)}\n\nQuestion: {Q.QUESTIONS[4]}"),
         )

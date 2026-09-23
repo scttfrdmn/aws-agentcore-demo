@@ -322,3 +322,26 @@ def test_q1_is_a_plain_answer_with_no_guardrail_or_code(backend, meter):
     # Exactly one model call, and it is the cheap one.
     tiers = [e["tier"] for e in events if e["type"] == "model"]
     assert tiers == ["haiku", "haiku"], f"expected one Haiku call (start+done), got {tiers}"
+
+
+def test_model_labels_look_versioned_and_cover_every_tier():
+    """Every displayed model name must carry its version.
+
+    MODEL_LABELS cannot be derived from config.MODELS -- config.py is git-ignored
+    and absent in CI -- so this is the guard against the two ways it drifts:
+    a tier gets added without a label, or a label loses its version. The second
+    is what actually happened: "Claude Opus" sat next to "OpenAI GPT-6 Astra" on
+    a projected receipt and invited "which Opus?".
+    """
+    from agentcore_demo.agent import MODEL_LABELS
+    from agentcore_demo.fakes import TEST_PRICING
+
+    assert set(MODEL_LABELS) == set(TEST_PRICING), (
+        "MODEL_LABELS and the priced tiers disagree; a tier without a label would "
+        "show up on the receipt as a bare key."
+    )
+    for tier, label in MODEL_LABELS.items():
+        assert any(c.isdigit() for c in label), (
+            f"label for tier {tier!r} is {label!r} -- no version in it. "
+            f"The audience should be able to tell which generation ran."
+        )
