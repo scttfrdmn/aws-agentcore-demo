@@ -175,8 +175,8 @@ def test_ws_question_precedes_its_model_events(fake_env):
     if current:
         blocks.append(current)
 
-    # Five beats: a plain opener was inserted before the guardrail beat
-    # when we found beat 4 (the Cedar policy demo) was excluded by default.
+    # Five beats, Q1 (plain opener) through Q5 (Cedar policy demo).  The Cedar
+    # beat was once excluded by default; the plain opener came later.
     assert len(blocks) == 5
     for block in blocks:
         assert block[0]["type"] == "question"

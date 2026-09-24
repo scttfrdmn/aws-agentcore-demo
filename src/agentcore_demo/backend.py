@@ -156,7 +156,7 @@ class Backend(Protocol):
             tool_name: the short tool name (without the target prefix).
             arguments: tool arguments dict (e.g. {"url": "https://..."}).
 
-        Returns exactly one of THREE shapes -- the third exists so beat 4 can
+        Returns exactly one of THREE shapes -- the third exists so beat 5 can
         never silently succeed, and never fake its own badge:
             {"result": response_body}
                 the tool ran and returned data.

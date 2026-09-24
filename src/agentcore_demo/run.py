@@ -10,7 +10,7 @@ Why use this instead of the web app?
     access), you'll see the error immediately in the terminal.
   - To run a single question cheaply during development: `--questions 1`
     runs Q1 only (Claude Haiku, a cent or two) instead of the full
-    four-question run (~$0.32).
+    five-question run (~$0.32).
   - To check the receipt total before committing to the full demo.
 
 Headless mode means no WebSocket, no browser -- just the same event stream
@@ -19,18 +19,18 @@ event protocol is identical to the WebSocket version, so a passing headless
 run confirms the web app will also work.
 
 Usage:
-    python -m agentcore_demo.run                # run Q1, Q2, Q3, Q4
+    python -m agentcore_demo.run                # run Q1-Q5
     python -m agentcore_demo.run --questions 1  # Q1 only
     python -m agentcore_demo.run --questions 1,3  # Q1 and Q3
-    python -m agentcore_demo.run --questions 4  # Q4 only (Cedar policy demo)
+    python -m agentcore_demo.run --questions 5  # Q5 only (Cedar policy demo)
 
     DEMO_FAKE=1 python -m agentcore_demo.run    # fake backend (no AWS, no cost)
     make demo-headless                          # same as the default run
 
 What this renderer does NOT show:
   _emit_to_terminal() has no branch for the `guardrail` or `policy_denied`
-  events, so beat 1's link interception and beat 4's Cedar badge are invisible
-  here.  Q4's denial still shows up, but as the `phase` line "web access denied
+  events, so beat 2's link interception and beat 5's Cedar badge are invisible
+  here.  Q5's denial still shows up, but as the `phase` line "web access denied
   by Cedar policy — answering from knowledge base".  Use the web app if you want
   to see the badges themselves.
 """
@@ -206,7 +206,7 @@ def _emit_to_terminal(ev: dict) -> None:  # noqa: C901  (switch-like structure, 
             print(f"      {a.get('original', '?')}  ->  {replacement}")
 
     elif t == "policy_denied":
-        # The whole point of beat 4.  Its ABSENCE is the failure mode that
+        # The whole point of beat 5.  Its ABSENCE is the failure mode that
         # matters, so print it unmissably rather than as a dim aside.
         print(f"  ■ Cedar policy DENIED {ev.get('tool', '?')}")
         print(f"      {ev.get('reason', '')}")

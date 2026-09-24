@@ -59,7 +59,7 @@ MODELS = {
     "haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "sonnet": "us.anthropic.claude-sonnet-5",
     "opus": "us.anthropic.claude-opus-5",
-    # The non-Anthropic cross-check for Q3.  OpenAI models arrived on Bedrock
+    # The non-Anthropic cross-check for Q4.  OpenAI models arrived on Bedrock
     # after this demo was first written; GPT-6 Astra is OpenAI's most capable
     # model (launched 2026-09-08).  Same "us." convention as above, but note
     # two OpenAI-specific facts (verified 2026-09-22):
@@ -122,7 +122,7 @@ GATEWAY_ID = ""
 GATEWAY_URL = ""
 GATEWAY_ENGINE_ID = ""
 
-# The Gateway target that publishes the web_fetch tool for beat 4.  Changing this
+# The Gateway target that publishes the web_fetch tool for beat 5.  Changing this
 # renames the MCP tool, because Gateway tool names are "{target}___{tool}" -- so
 # it must stay in step with AwsBackend(gateway_target=...) in aws.py AND with the
 # ForbidWeb Cedar rule in build_kb.py, whose action is the WHOLE prefixed name:

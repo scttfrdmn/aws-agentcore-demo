@@ -1,7 +1,7 @@
 """
 agent.py  --  the demo orchestration layer.
 
-This is the core of the demo.  It runs the four locked questions (and any
+This is the core of the demo.  It runs the five locked questions (and any
 free-form question) against a Backend, and reports every step of the process
 by calling an emit(event: dict) callback.
 
@@ -13,8 +13,8 @@ Tests provide an emit that collects events into a list for assertions.
 This module is the source of truth for the event protocol.  See CLAUDE.md
 for the full table; the EVENT TYPES comment below has the quick reference.
 
-How Q3 works (Opus + GPT-6 Astra run in parallel):
-  Question 3 asks two model families to read the same evidence independently,
+How Q4 works (Opus + GPT-6 Astra run in parallel):
+  Question 4 asks two model families to read the same evidence independently,
   then a third model adjudicates where they disagree.  Both reviewers read in
   parallel using a ThreadPoolExecutor so the audience sees both models running
   at the same time.  A threading.Lock protects emit() because the two threads
@@ -27,7 +27,7 @@ How free-form questions are routed:
   (fractions of a cent).  The routing cost IS included in the receipt.
 
 What the guardrail substitution does:
-  Q1 and Q3 system prompts instruct models to cite papers as full NCBI URLs.
+  Q2 and Q4 system prompts instruct models to cite papers as full NCBI URLs.
   The Bedrock Guardrail anonymises those URLs and returns "{EXTERNAL_URL}"
   placeholders in the model output.  _model() inspects the guardrail trace,
   matches each placeholder to its original URL, and replaces it with either:
@@ -171,7 +171,7 @@ ROUTE_LABEL_TEMPLATES = {
 class Agent:
     """Drives the demo and emits events as each step completes.
 
-    Constructed fresh for every run (one question or all four).
+    Constructed fresh for every run (one question or all five).
     The backend and meter are passed in so tests can inject fakes without
     any AWS dependency.
     """
@@ -277,9 +277,9 @@ class Agent:
         # Leaving it on therefore buys nothing and costs three ways: latency,
         # output-token charges, and the output budget itself.  That last one is
         # not theoretical:
-        #   - Q3, Opus 5, max_tokens=8192: 108s and the review was truncated at
+        #   - Q4 (then numbered Q3), Opus 5, max_tokens=8192: 108s and the review was truncated at
         #     exactly 8192 because thinking ate the budget.
-        #   - Q2, Sonnet 5, max_tokens=4096: returned ONLY a reasoningContent
+        #   - Q3 (then numbered Q2), Sonnet 5, max_tokens=4096: returned ONLY a reasoningContent
         #     block and NO text at all -- zero lines of analysis code.  Caught
         #     by the guard in aws.py::converse rather than silently charting
         #     nothing, but fatal to the beat either way.
@@ -416,7 +416,7 @@ class Agent:
             word = "SYNTHESIS"
         return word
 
-    # -- Q1: friction gone -- Haiku reads and cites ----------------------
+    # -- Q1: just ask it -- Haiku, one plain cited answer ----------------
 
     def question_1(self, text: str = Q.QUESTIONS[0]) -> None:
         """Beat 1: the plain opener -- one question, one cited answer, no security theatre.
@@ -450,14 +450,16 @@ class Agent:
         )
         self.emit({"type": "answer", "title": "Answer  ·  Claude Haiku", "text": answer})
 
+    # -- Q2: the links never leave -- Haiku cites, the Guardrail intercepts
+
     def question_2(self, text: str = Q.QUESTIONS[1]) -> None:
-        """Beat 1: Haiku answers a background question with citations.
+        """Beat 2: Haiku answers a background question with citations.
 
         Demo story: "With Bedrock, a researcher can ask a plain question and
         get a cited answer from 1,000 papers -- no setup, no data leaving AWS."
 
         Model choice: Haiku 4.5 -- cheapest capable model.  The point of
-        beat 1 is to show that even a fast, cheap model gives useful output
+        beat 2 is to show that even a fast, cheap model gives useful output
         when backed by a good knowledge base.
 
         Guardrail in action: Haiku is prompted to cite papers as full NCBI
@@ -477,10 +479,10 @@ class Agent:
         )
         self.emit({"type": "answer", "title": "Cited synthesis  ·  Claude Haiku", "text": result})
 
-    # -- Q2: real work -- Sonnet writes code, Code Interpreter runs it ---
+    # -- Q3: real work -- Sonnet writes code, Code Interpreter runs it ---
 
     def question_3(self, text: str = Q.QUESTIONS[2]) -> None:
-        """Beat 2: Sonnet writes analysis code; Code Interpreter runs it in a microVM.
+        """Beat 3: Sonnet writes analysis code; Code Interpreter runs it in a microVM.
 
         Demo story: "Real analytical work -- Sonnet reads the trial data,
         writes Python, and a Bedrock microVM executes it and returns a chart."
@@ -531,10 +533,10 @@ class Agent:
                 {"type": "answer", "title": "Code Interpreter output  ·  microVM", "text": clean}
             )
 
-    # -- Q3: the hard call -- Opus AND GPT-6 Astra in parallel, then adjudicate
+    # -- Q4: the hard call -- Opus AND GPT-6 Astra in parallel, then adjudicate
 
     def question_4(self, text: str = Q.QUESTIONS[3]) -> None:
-        """Beat 3: Opus and GPT-6 Astra read evidence in parallel; Sonnet adjudicates.
+        """Beat 4: Opus and GPT-6 Astra read evidence in parallel; Sonnet adjudicates.
 
         Demo story: "For the hardest question -- where experts disagree --
         we run two frontier models from DIFFERENT companies in parallel and
@@ -557,12 +559,13 @@ class Agent:
         than 8192.  Measured against real AWS on 2026-09-22, the original
         settings cost the demo dearly:
             Opus 5, thinking on, max_tokens=8192 -> 108.2s, output hit 8192
-              exactly (i.e. the review was truncated), Q3 total 141.2s
+              exactly (i.e. the review was truncated), Q4 (then numbered Q3)
+              total 141.2s
             Opus 5, thinking off, max_tokens=3000 ->  27.5s, output 1,631
         Astra produced a complete 1,566-token review, so even 3000 is ample; the
         shipped 4096 is that plus headroom, and 8192 was simply letting Opus run
         until it was cut off.  With these settings plus the "max 400 words"
-        instruction in REVIEW_SYSTEM, Q3 came in at 48s against 141s before.
+        instruction in REVIEW_SYSTEM, this beat came in at 48s against 141s before.
         Adaptive thinking is
         on by default on Claude 5 models and its output is NEVER displayed
         (thinking.display defaults to omitted), so leaving it on spent ~80
@@ -649,7 +652,7 @@ class Agent:
             {"type": "answer", "title": "Two model families, cross-checked", "text": adjudication}
         )
 
-    # -- Q4: Cedar Gateway demo -- web_fetch blocked, fallback to KB -----
+    # -- Q5: Cedar Gateway demo -- web_fetch blocked, fallback to KB -----
 
     # Arguments for the web_fetch tool.  These are the query parameters of the
     # ClinicalTrials.gov v2 /studies operation as declared in the "web-tools"
@@ -665,7 +668,7 @@ class Agent:
     }
 
     def question_5(self) -> None:
-        """Beat 4: Cedar policy denies web_fetch; agent falls back to the knowledge base.
+        """Beat 5: Cedar policy denies web_fetch; agent falls back to the knowledge base.
 
         Demo story: "Even with an external tool configured, a Cedar policy
         can block specific tool calls.  The agent detects the denial and
@@ -744,7 +747,7 @@ class Agent:
                 "Q5  synthesis",
                 "haiku",
                 self._label("haiku"),
-                Q.Q4_GATEWAY_SYSTEM,
+                Q.Q5_GATEWAY_SYSTEM,
                 (
                     f"Trial data:\n{trial_data}\n\n"
                     f"Passages:\n{self._context(chunks)}\n\n"
@@ -755,7 +758,7 @@ class Agent:
         self.emit({"type": "answer", "title": "Clinical trials  ·  Claude Haiku", "text": text})
 
     def _q5_from_kb(self, note: str) -> str:
-        """Answer Q4 from the knowledge base alone, telling the model why.
+        """Answer Q5 from the knowledge base alone, telling the model why.
 
         Shared by both no-web-data paths (policy denial and gateway error) so the
         fallback answer is identical apart from the one-line explanation, and so
@@ -773,7 +776,7 @@ class Agent:
             "Q5  synthesis",
             "haiku",
             self._label("haiku"),
-            Q.Q4_GATEWAY_SYSTEM,
+            Q.Q5_GATEWAY_SYSTEM,
             (f"Note: {note}\n\nPassages:\n{self._context(chunks)}\n\nQuestion: {Q.QUESTIONS[4]}"),
         )
 
@@ -785,7 +788,7 @@ class Agent:
         The flow is:
           1. Classify the question (route()) -- one cheap Haiku call.
           2. Emit a "route" event so the UI can show the chosen path.
-          3. Dispatch to question_1, question_2, or question_3 with the
+          3. Dispatch to question_2, question_3, or question_4 with the
              user's text replacing the canned question.
           4. Emit receipt and done.
 
@@ -814,11 +817,11 @@ class Agent:
         the KB panel before the first question starts.
 
         Args:
-            which: a sequence of question numbers (1-4) to run.
+            which: a sequence of question numbers (1-5) to run.
                    Default is (1, 2, 3, 4, 5) -- all five demo beats.  Q5 used to be
                    excluded by default, which meant the Cedar beat never ran
                    unless it was asked for by name; "Run complete" belongs after
-                   Q4, not after Q3.
+                   Q5, not after Q4.
         """
         # Emit the KB panel costs as the very first event so the sidebar
         # shows measured numbers while the questions are running.
@@ -841,7 +844,7 @@ class Agent:
     def _extract_chart(stdout: str) -> tuple[str | None, str]:
         """Pull a base64 PNG from the Code Interpreter output.
 
-        The generated Q2 script ends with:
+        The generated Q3 script ends with:
             print('CHART_B64:' + base64.b64encode(buf.getvalue()).decode())
 
         This method finds that token in stdout, validates that it decodes to a

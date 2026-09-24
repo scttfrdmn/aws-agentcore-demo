@@ -73,7 +73,7 @@ Verified AWS Price List quirks (do not "fix" without re-checking):
     Live price: $0.02 / 1M tokens (on-demand, us-west-2) -- matches config.py.
 
   OpenAI GPT-6 Astra pricing (2026-09-22):
-    Astra replaced Amazon Nova Pro as the Q3 cross-check.  Its rates are taken
+    Astra replaced Amazon Nova Pro as the Q4 cross-check.  Its rates are taken
     from the Bedrock model card, NOT the Price List API:
       $11.00 / $55.00 per 1M tokens (in/out), Standard tier, Geo CRIS,
       short context (<= 272K input tokens).
@@ -87,7 +87,7 @@ Verified AWS Price List quirks (do not "fix" without re-checking):
         for any larger workload.
       - The quoted price already includes Bedrock's 10% fee over OpenAI's
         own rates; do not add it again.
-    Astra is the most expensive model in the demo -- Q3 dominates the receipt.
+    Astra is the most expensive model in the demo -- Q4 dominates the receipt.
 
   Region prefix convention:
     The Price List API uses regional usagetype prefixes that do NOT always match

@@ -9,7 +9,7 @@ Endpoints:
   GET /static/*         serves static assets (CSS, JS, images)
   GET /api/kb-status    {"ready": bool} -- does the KB have indexed documents?
   GET /api/kb-costs     KB panel costs: ingestion, storage, vector/corpus stats
-  GET /api/questions    the four locked question texts (used by the teletype UI)
+  GET /api/questions    the five locked question texts (used by the teletype UI)
   GET /corpus/{pmcid}   serve a local corpus paper as a readable HTML page
   WS  /ingest           run ingestion; stream progress; send kb_ready when done
   WS  /ws               run the agent; forward every event as JSON
@@ -332,9 +332,9 @@ async def websocket_run(
     """Run the agent and forward every event as JSON over the WebSocket.
 
     Query parameters:
-      q=1|2|3|4   run one of the four canned questions.
+      q=1..5      run one of the five canned questions.
       text=...    run a free-form question (routed via Haiku).
-      (neither)   run all four canned questions (Q1, Q2, Q3, Q4).
+      (neither)   run all five canned questions (Q1-Q5).
 
     The agent runs in a thread pool (asyncio.to_thread) so the blocking
     Bedrock API calls don't stall the async event loop.

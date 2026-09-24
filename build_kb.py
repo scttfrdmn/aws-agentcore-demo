@@ -40,7 +40,7 @@ What this script creates (in order):
                   an OpenAPI target over the public ClinicalTrials.gov v2 API
                   that publishes a real ``web_fetch`` tool (no Lambda, nothing
                   to own); the Cedar "ForbidWeb" policy then denies the
-                  web_fetch call that Q4 attempts.  The tool being real is the
+                  web_fetch call that Q5 attempts.  The tool being real is the
                   point: lift the policy and the call genuinely succeeds.
 
 Re-running safely (idempotent):
@@ -777,7 +777,7 @@ def web_tools_openapi_schema() -> str:
 def create_gateway_target(br_ctrl, gateway_id: str) -> str:
     """Get-or-create the "web-tools" OpenAPI target that publishes web_fetch.
 
-    This is the target that makes beat 4 honest.  Before it existed, the Cedar
+    This is the target that makes beat 5 honest.  Before it existed, the Cedar
     ForbidWeb rule denied a tool that was not registered anywhere: the demo
     only worked because Cedar evaluates ``InvokeTool`` before the gateway
     resolves the target, so the forbid fired first.  Had that ordering ever
@@ -895,7 +895,7 @@ def create_gateway_target(br_ctrl, gateway_id: str) -> str:
             reasons = "; ".join(detail.get("statusReasons", [])) or "(no reason given)"
             raise RuntimeError(
                 f"Gateway target {target_name} is {status}: {reasons}\n"
-                "Beat 4 needs a READY target -- fix this before the talk.  The most "
+                "Beat 5 needs a READY target -- fix this before the talk.  The most "
                 "likely cause is the inline OpenAPI schema in "
                 "web_tools_openapi_schema() failing validation."
             )
@@ -910,7 +910,7 @@ def create_gateway() -> dict:
     """Create an AgentCore Gateway with a Cedar policy engine attached.
 
     The Gateway is the access-control layer for tool calls.  In this demo
-    it intercepts Q4's attempt to call web_fetch and denies it, then the
+    it intercepts Q5's attempt to call web_fetch and denies it, then the
     agent falls back to the knowledge base.  This demonstrates Cedar
     policy-based guardrails at the tool level.
 
@@ -1128,7 +1128,7 @@ def create_gateway() -> dict:
     # to the gateway in ENFORCE mode" and skip the policy block entirely, using
     # attachment as a proxy for "policies exist".  That proxy is wrong in the one
     # case that matters -- an attached engine whose policies were deleted would
-    # never get them back, leaving beat 4 silently unguarded.  Now that the
+    # never get them back, leaving beat 5 silently unguarded.  Now that the
     # policies are get-or-create by stable name, just always reconcile them; it
     # costs one list_policies call and is self-healing.
     if current_pec_check and current_pec_check.get("arn") == engine_arn:
@@ -1161,7 +1161,7 @@ def create_gateway() -> dict:
     # which NEVER MATCHED.  It went unnoticed for months because there was no
     # real gateway target, so the call failed for unrelated reasons and the UI
     # showed a denial anyway.  Once "web-tools" became a real OpenAPI target the
-    # bug surfaced in the worst possible way: beat 4 quietly SUCCEEDED, fetching
+    # bug surfaced in the worst possible way: beat 5 quietly SUCCEEDED, fetching
     # live ClinicalTrials.gov results and demonstrating the exact opposite of the
     # security point the beat exists to make.
     #

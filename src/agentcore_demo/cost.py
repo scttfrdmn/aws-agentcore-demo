@@ -26,7 +26,7 @@ What gets measured vs. what gets computed:
     separate setup_cost event.  They are NOT added to the run total.
 
 Thread safety:
-  Q3 runs Claude Opus and OpenAI GPT-6 Astra in parallel threads.  Both call
+  Q4 runs Claude Opus and OpenAI GPT-6 Astra in parallel threads.  Both call
   meter.add_llm() concurrently.  The CostMeter uses a threading.Lock around
   the rows list to prevent data races.  The lock is intentionally not a
   dataclass field that shows up in repr/eq (init=False, repr=False,
@@ -47,7 +47,7 @@ class CostRow:
     produces one row.  The receipt event is a list of these rows plus the total.
     """
 
-    step: str  # e.g. "Q1  synthesis", "Q2  analysis run"
+    step: str  # e.g. "Q1  synthesis", "Q3  analysis run"
     label: str  # human-readable model/service name for the UI
     in_tokens: int  # input tokens (0 for compute and retrieval rows)
     out_tokens: int  # output tokens (0 for compute and retrieval rows)
@@ -95,7 +95,7 @@ class CostMeter:
             (inputTokens / 1,000,000) × per_in_rate
           + (outputTokens / 1,000,000) × per_out_rate
 
-        Thread-safe: safe to call from multiple threads concurrently (Q3
+        Thread-safe: safe to call from multiple threads concurrently (Q4
         calls this from both the Opus thread and the Astra thread).
 
         Args:
@@ -122,7 +122,7 @@ class CostMeter:
         in_tokens and out_tokens are 0 for compute rows.
 
         Args:
-            step: receipt label (e.g. "Q2  analysis run").
+            step: receipt label (e.g. "Q3  analysis run").
             seconds: wall-clock duration returned by code_interpreter_run().
 
         Returns:

@@ -1,7 +1,7 @@
 """
 questions.py  --  the locked question texts and their system prompts.
 
-All four demo questions are rehearsed for the live talk.
+All five demo questions are rehearsed for the live talk.
 DO NOT reword them.  The exact phrasing has been tested for timing,
 audience clarity, and model response quality.
 
@@ -76,13 +76,13 @@ The five demo beats and their model choices:
     Why Sonnet for adjudication: Fast and accurate enough to compare two
                   expert reviews.  Opus would be unnecessary for this task.
     Cost note: Astra is the most expensive model in this demo ($11/$55 per 1M
-                  tokens vs Opus at $5/$25), so Q3 dominates the receipt.  That
+                  tokens vs Opus at $5/$25), so Q4 dominates the receipt.  That
                   is an honest and useful thing to show -- the audience sees the
                   hardest question cost the most, and still well under a dollar.
 
   Beat 5 -- "Secure by policy"
     Question: Search ClinicalTrials.gov for ongoing trials testing the experiments
-              Q3 identified as priorities.
+              Q4 identified as priorities.
     Model: Claude Haiku 4.5
     Story: The agent tries to fetch from ClinicalTrials.gov via the AgentCore
            Gateway.  A Cedar ForbidWeb policy denies the tool call.  The agent
@@ -96,6 +96,9 @@ The five demo beats and their model choices:
 SUBJECT = "PCSK9"
 
 # The five canned questions -- locked for the live talk.
+# Q5 read "the experiments Q3 identified" until 2026-09-23 -- written before the
+# plain opener shifted every beat down one.  The owner changed it to Q4 (the
+# second-opinion beat, which is where the experiments come from).
 QUESTIONS = [
     "What does PCSK9 do, and why do cardiologists care about it?",
     "What is the established role of PCSK9 in LDL-cholesterol regulation?",
@@ -104,7 +107,7 @@ QUESTIONS = [
     "Where does the literature disagree about the off-target or adverse "
     "effects of PCSK9 inhibition, and what should be tested next?",
     "Search ClinicalTrials.gov for ongoing trials testing the experiments "
-    "Q3 identified as priorities.",
+    "Q4 identified as priorities.",
 ]
 
 # System prompt for Q1 -- the plain opener (Claude Haiku 4.5).
@@ -159,7 +162,7 @@ CODEGEN_SYSTEM = (
 # Both models receive the SAME system prompt and the SAME passages.
 # The point is that two independent models may notice different things --
 # their disagreements highlight genuinely uncertain areas in the literature.
-# Full NCBI URLs are requested here too so the guardrail is active on Q3.
+# Full NCBI URLs are requested here too so the guardrail is active on Q4.
 # The brevity instruction is load-bearing, not stylistic (added 2026-09-22).
 # Without it Opus 5 ran to whatever max_tokens allowed -- it hit an 8192 ceiling
 # and then a 3000 ceiling exactly, meaning the review was TRUNCATED mid-sentence
@@ -167,7 +170,7 @@ CODEGEN_SYSTEM = (
 # review also has to fit on a projector: nobody in row 12 reads 3,000 tokens.
 # Both reviewers get the identical prompt, so this constrains them symmetrically.
 # The shipped budget is now max_tokens=4096 with thinking disabled for both
-# reviewers (agent.question_3) -- 400 words fits inside that with room to spare.
+# reviewers (agent.question_4) -- 400 words fits inside that with room to spare.
 REVIEW_SYSTEM = (
     "You are a careful biomedical reviewer. From ONLY these passages, identify "
     "points of genuine disagreement about off-target / adverse effects, and "
@@ -189,7 +192,7 @@ ADJUDICATE_SYSTEM = (
 # System prompt for Q5 -- Cedar Gateway tool demo (Claude Haiku 4.5).
 # The agent will try to call web_fetch; when denied, it uses the knowledge base.
 # This prompt instructs it to explain what happened and answer from what it knows.
-Q4_GATEWAY_SYSTEM = (
+Q5_GATEWAY_SYSTEM = (
     "You are a clinical research assistant. The user wants you to search for ongoing "
     "clinical trials. You have access to a web_fetch tool to query ClinicalTrials.gov. "
     "If web access is denied by policy, explain what you tried and summarize what the "

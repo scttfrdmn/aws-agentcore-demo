@@ -290,10 +290,10 @@ never actually been exercised are now exercised. Findings worth keeping:
   *succeeded* — fetching live ClinicalTrials.gov data and demonstrating the
   exact opposite of its own security point. A denial names the policy:
   `Tool Execution Denied: ... [Policy evaluation denied due to ForbidWeb-xxxx]`.
-- **Adaptive thinking is on by default and is never displayed.** Opus 5 on Q3
-  took **108s** and ran output to the `8192` ceiling (truncating its review).
+- **Adaptive thinking is on by default and is never displayed.** Opus 5 on Q4 (then
+  numbered Q3) took **108s** and ran output to the `8192` ceiling (truncating its review).
   With `thinking: disabled` and a "be concise, 400 words" instruction shared by
-  both reviewers, Q3 went **141s → 48s** with no truncation. `thinking` is
+  both reviewers, that beat went **141s → 48s** with no truncation. `thinking` is
   Anthropic-only — sending it to Astra returns `unknown_parameter`.
 - **`content[0]["text"]` is wrong.** With thinking on, block 0 is
   `reasoningContent`. Join every block that has a `text` key.
@@ -303,7 +303,7 @@ never actually been exercised are now exercised. Findings worth keeping:
   responsive, not the HTTP read alive.
 - **GPT-6 Astra books prompt tokens as cache tokens.** `inputTokens` comes back
   as ~2 while `cacheWriteInputTokens`/`cacheReadInputTokens` hold the real
-  count. Taken at face value it understated Q3 by ~$0.14. `converse()` now
+  count. Taken at face value it understated Q4 by ~$0.14. `converse()` now
   falls back to the cache fields.
 - **AWS list responses are inconsistently keyed.** `ListPolicyEngines` →
   `policyEngines`, `ListPolicies` → `policies`, `ListGateways` /
@@ -364,9 +364,10 @@ supported at all. Do not "modernise" this onto Mantle or the Responses API.
 **Adaptive thinking is on by default** on Opus 5 and Sonnet 5, including when
 the request omits `thinking` — which `aws.py` does. Opus 4.7 behaved the
 opposite way, so the Sept 2026 bump turned thinking on silently. It raises
-latency and bills thinking as output tokens. It is left on for Q1/Q2 but
-**disabled for both Q3 reviewers** (`converse(..., thinking="disabled")`), which
-is what took Q3 from 141s to 48s. `thinking` is Anthropic-only — Astra rejects
+latency and bills thinking as output tokens. It was first
+**disabled for both Q4 reviewers** (`converse(..., thinking="disabled")`), which
+is what took that beat from 141s to 48s; `Agent._model()` now disables it on
+every other call too. `thinking` is Anthropic-only — Astra rejects
 it with `unknown_parameter`.
 
 **Why not Claude Fable 5.1?** It is Anthropic's most capable widely released

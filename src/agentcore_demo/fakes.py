@@ -36,7 +36,7 @@ What is "canned" in the fake:
 
   retrieve()       -- returns 6 plausible-looking passages per call.
   converse()       -- returns a tier-labelled placeholder answer, EXCEPT:
-    - for the code-generation system prompt (Q2), returns valid Python
+    - for the code-generation system prompt (Q3), returns valid Python
       that prints a 1×1 PNG as CHART_B64 so the chart path is exercised.
     - for the routing system prompt, classifies the question by keyword.
   code_interpreter_run() -- echoes the CHART_B64 line from the code.
@@ -168,7 +168,7 @@ class FakeBackend:
         """Return a canned response appropriate to the tier and system prompt.
 
         Special cases:
-          - Code-generation prompt (Q2): return valid Python that prints a
+          - Code-generation prompt (Q3): return valid Python that prints a
             CHART_B64 token so the chart extraction path is exercised.
           - Routing prompt: classify by keyword so routing tests are deterministic.
           - Everything else: return a placeholder answer with the tier name.
@@ -176,7 +176,7 @@ class FakeBackend:
         self.calls.append(f"converse:{tier}")
         usage = {"inputTokens": 12_000, "outputTokens": 1_000}
 
-        # Q2: the system prompt mentions "self-contained Python".
+        # Q3: the system prompt mentions "self-contained Python".
         # Return a minimal script that prints a valid base64 PNG.
         if tier == "sonnet" and "self-contained Python" in system:
             code = f"import io, base64\nprint('CHART_B64:{_PNG_1x1}')"
@@ -244,7 +244,7 @@ class FakeBackend:
 
         Set ``gateway_outcome`` to drive the other two branches the real
         backend can return.  The "error" case matters most: it is the branch
-        added so beat 4 cannot silently succeed when the gateway misbehaves,
+        added so beat 5 cannot silently succeed when the gateway misbehaves,
         and without a way to reach it from a fake it would ship untested.
             "denied"  (default) -- Cedar policy denial, the rehearsed path
             "error"             -- gateway reachable but the call failed

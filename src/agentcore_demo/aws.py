@@ -50,8 +50,9 @@ Verified AWS quirks (do not "fix" these without checking current docs):
          300s budget spent on output nobody sees.
     converse() therefore takes a `thinking` argument: pass thinking="disabled"
     and it sends additionalModelRequestFields={"thinking": {"type": "disabled"}}.
-    agent.question_3 does exactly that for both Q3 reviewers, which is what took
-    Q3 from 141s to 48s.  Everywhere else the default is left alone.
+    agent.question_4 does exactly that for both Q4 reviewers, which is what took
+    that beat from 141s to 48s, and Agent._model() now does it for every other
+    call as well.
     The field is ANTHROPIC-ONLY: sending it to GPT-6 Astra returns
     ValidationException (unknown_parameter), so converse() gates on the model ID
     containing "anthropic" rather than on the tier name.
@@ -91,7 +92,7 @@ Verified AWS quirks (do not "fix" these without checking current docs):
   Gateway failures are NOT denials (2026-09-22):
     query_gateway() returns three distinct outcomes -- denied / result / error.
     Only a message matching _is_policy_denial() may claim a Cedar denial; every
-    other failure returns {"error": True} so beat 4 cannot silently succeed or
+    other failure returns {"error": True} so beat 5 cannot silently succeed or
     silently fake its own badge.
 """
 
@@ -150,7 +151,7 @@ def _is_policy_denial(message: str) -> bool:
     Kept deliberately narrow and in one place.  Everything that is *not* matched
     here becomes a visible error rather than a "Cedar Policy Denied" badge, so a
     loose match would let an unrelated failure impersonate the security story
-    beat 4 is making.  "Tool Execution Denied" is the phrasing AgentCore actually
+    beat 5 is making.  "Tool Execution Denied" is the phrasing AgentCore actually
     returns (verified 2026-05-21); the other two are defensive.
 
     Args:
@@ -244,8 +245,9 @@ class AwsBackend:
         # Model calls get a long read timeout.  botocore defaults to 60s, and
         # that is no longer enough: Claude Opus 5 with adaptive thinking on (the
         # default -- see the module docstring) at maxTokens=8192 took longer than
-        # that on Q3 and raised ReadTimeoutError mid-run on 2026-09-22.  The
-        # demo failed at beat 3 before this was raised.  Q3 now runs with thinking
+        # that on Q4 (then numbered Q3) and raised ReadTimeoutError mid-run on
+        # 2026-09-22; the demo failed at that beat before this was raised.  Q4 now
+        # runs with thinking
         # disabled at maxTokens=4096 and finishes in ~48s, so the 600s ceiling is
         # no longer load-bearing -- it stays as free insurance for a slow day.
         # retries are left at botocore's default mode but capped low: a silent
@@ -277,7 +279,7 @@ class AwsBackend:
         them.  The headless runner therefore ran with the Bedrock Guardrail and
         the AgentCore Gateway silently DISABLED, so `make demo-headless` -- the
         very command the README offers for verifying the demo -- exercised
-        neither beat 1's link interception nor beat 4's Cedar denial, and beat 4
+        neither beat 2's link interception nor beat 5's Cedar denial, and beat 5
         reported "No gateway configured" instead of a policy denial.
 
         Two call sites constructing the same object with different arguments is
@@ -315,7 +317,7 @@ class AwsBackend:
 
         Args:
             query: the question or search phrase to embed.
-            n: number of passages to return (default 12; Q2/Q3 use 16).
+            n: number of passages to return (default 12; Q3/Q4 use 16).
 
         Returns:
             A list of dicts with keys "text", "source" (PMC ID), and "score".
@@ -420,13 +422,14 @@ class AwsBackend:
         # Join every text block, rather than assuming content[0] is one.
         #
         # This line used to read content[0]["text"] and that broke the demo the
-        # first time it ran on Claude 5 (2026-09-22, KeyError: 'text' on Q2).
+        # first time it ran on Claude 5 (2026-09-22, KeyError: 'text' on the Sonnet
+        # code-generation beat, then Q2, now Q3).
         # Opus 5 and Sonnet 5 run adaptive thinking by default even when the
         # request omits a "thinking" field -- which this method does -- so the
         # FIRST content block is now a reasoning block and the visible answer
         # comes later.  Opus 4.7 put text at index 0, which is why this was
         # never wrong before the model refresh.  Haiku 4.5 still puts text
-        # first, which is why beat 1 passed and only beat 2 blew up.
+        # first, which is why the Haiku beat passed and only the Sonnet beat blew up.
         #
         # Converse may also legitimately split one answer across several text
         # blocks, so concatenating is more correct than picking the first.
@@ -444,14 +447,14 @@ class AwsBackend:
             )
 
         # GPT-6 Astra reports prompt tokens in the CACHE fields, not inputTokens
-        # (2026-09-22).  Measured on the identical Q3 prompt:
+        # (2026-09-22).  Measured on the identical Q4 review prompt:
         #     Claude Opus 5      inputTokens = 13,107  cacheWrite =     0
         #     OpenAI GPT-6 Astra inputTokens =      2  cacheWrite = 3,614
         # So nothing is missing -- Astra runs implicit prompt caching and books the
         # prompt as a cache WRITE, leaving inputTokens at ~0.  Taken at face value
-        # that understates Astra's input cost by ~$0.14 per Q3, which on a talk
+        # that understates Astra's input cost by ~$0.14 per Q4, which on a talk
         # whose whole thesis is honest cost numbers is the worst place to be
-        # quietly wrong (it made Q3 look like $0.1587 instead of $0.2556).
+        # quietly wrong (it made Q4 look like $0.1587 instead of $0.2556).
         #
         # Fix: when inputTokens is implausible for the prompt we actually sent,
         # fall back to the cache counters, which are REAL metered numbers.  Only
@@ -495,7 +498,7 @@ class AwsBackend:
 
         The Code Interpreter runs in a fresh, ephemeral container for each
         invocation.  It has matplotlib, numpy, and pandas pre-installed.
-        The generated code from Q2 ends by printing a base64 PNG string;
+        The generated code from Q3 ends by printing a base64 PNG string;
         agent._extract_chart() picks that out of the stdout.
 
         AgentCore Code Interpreter API shape (verified 2026-05-20):
@@ -647,7 +650,7 @@ class AwsBackend:
             denial keywords, so it fell through to the SUCCESS branch and the
             "Cedar Policy Denied" badge silently never appeared.  Meanwhile a
             DNS blip or a stale GATEWAY_URL reported itself AS a Cedar denial,
-            which is a lie told on stage.  Beat 4's whole claim is "the policy
+            which is a lie told on stage.  Beat 5's whole claim is "the policy
             stopped this", so only a recognised denial may say so.
 
         Cedar policy denial quirk (verified 2026-05-21):

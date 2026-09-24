@@ -21,7 +21,7 @@ from botocore.session import get_session
 
 # ── AgentCore Code Interpreter ───────────────────────────────────────────────
 #
-# Used by aws.py :: Backend.code_interpreter_run(), which is beat 2 of the demo:
+# Used by aws.py :: Backend.code_interpreter_run(), which is beat 3 of the demo:
 #     ci = CodeInterpreter(region); ci.start()
 #     resp = ci.invoke("executeCode", {"language": "python", "code": code})
 #     ci.stop()

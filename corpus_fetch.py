@@ -106,7 +106,7 @@ import xml.etree.ElementTree as ET
 
 import requests
 
-# The gene we're searching for.  All four demo questions are about PCSK9.
+# The gene we're searching for.  All five demo questions are about PCSK9.
 GENE = "PCSK9"
 
 # Co-terms to narrow the search to PCSK9's most relevant literature.

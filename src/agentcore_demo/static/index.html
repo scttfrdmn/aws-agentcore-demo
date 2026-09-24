@@ -357,7 +357,7 @@
     }
     .guardrail-badge .gb-icon { margin-right: 0.35rem; }
 
-    /* Cedar policy denial badge (Q4 gateway demo) */
+    /* Cedar policy denial badge (Q5 gateway demo) */
     .policy-badge {
       background: rgba(224,96,96,.08); border: 1px solid rgba(224,96,96,.35);
       border-radius: 8px; padding: 0.5rem 0.85rem; margin-bottom: 0.4rem;
@@ -673,10 +673,10 @@
         </div>
       </template>
 
-      <!-- done banner only after all FOUR canned questions complete -->
+      <!-- done banner only after all FIVE canned questions complete -->
       <div class="done-banner" x-show="allBeatsDone">✓ Run complete</div>
 
-      <!-- total receipt after all four done — accumulates all question rows -->
+      <!-- total receipt after all five done — accumulates all question rows -->
       <template x-if="allBeatsDone">
         <div class="receipt-card" style="margin-top:0.5rem">
           <h2>Total Receipt</h2>
@@ -813,9 +813,10 @@ function demo() {
     _baseTotal:    0,    // accumulated total from completed questions
 
     get allBeatsDone() {
-      // "Run complete" fires after all FOUR canned questions are answered.
+      // "Run complete" fires after every canned question (five) is answered.
       // Renamed from allThreeDone on 2026-09-22: the logic already required 4
-      // (beat 4 is the Cedar policy demo), only the name still said three.
+      // at the time (the Cedar policy demo, then beat 4, now beat 5), only the
+      // name still said three.
       // Five beats since 2026-09-22 (a plain opener was added before the
       // guardrail beat).  Derived from canned.length so /api/questions stays
       // the single source of truth for how many beats there are.
@@ -964,7 +965,7 @@ function demo() {
 
     // ── live timer for running models ──────────────────────────
     // Each running model row stores its own startedAt timestamp so parallel
-    // models (e.g. Opus + GPT-6 Astra in Q3) each show their own independent elapsed
+    // models (e.g. Opus + GPT-6 Astra in Q4) each show their own independent elapsed
     // time.  The interval reads per-row startedAt rather than a shared t0.
     _startTimers() {
       if (this._timerHandle) return;
