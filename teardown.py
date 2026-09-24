@@ -218,6 +218,13 @@ def _why(name: str, config_ids: set, *, tagged: bool = False) -> list[str]:
     Reporting every reason rather than the first is deliberate: the dry-run
     output is how a repo user audits the sweep, and "[name] only" on something
     they expected to be tagged is the signal that build_kb.py failed to tag it.
+
+    That only works if the tag is ALWAYS looked up, so every _discover_* does,
+    even when config or name has already claimed the resource.  It used to skip
+    the lookup in that case to save a call, which meant the tag could never
+    appear next to config/name -- the audit could not tell "tagged" from
+    "build_kb.py silently failed to tag", and the tag backstop went unverified
+    (found 2026-09-24: every tagged resource showed [config, name]).
     """
     reasons = []
     if config_ids:
@@ -240,17 +247,16 @@ def _discover_gateways() -> list[dict]:
         for gw in _paginate(br_ctrl.list_gateways, "items"):
             gid, name = gw["gatewayId"], gw.get("name", "")
             ids = {gid} & {cfg_id} if cfg_id else set()
-            tagged = False
-            if not ids and not _name_matches(name):
-                # Only pay for the Get + ListTags when cheaper signals missed.
-                # ListGateways items carry no ARN; GetGateway does.
-                try:
-                    arn = br_ctrl.get_gateway(gatewayIdentifier=gid)["gatewayArn"]
-                    tagged = _has_project_tag(
-                        lambda a=arn: br_ctrl.list_tags_for_resource(resourceArn=a)
-                    )
-                except Exception:  # noqa: BLE001
-                    tagged = False
+            # Checked even when config or name already claims it -- see _why.
+            # ListGateways items carry no ARN; GetGateway does.
+            try:
+                arn = br_ctrl.get_gateway(gatewayIdentifier=gid)["gatewayArn"]
+                tagged = _has_project_tag(
+                    lambda a=arn: br_ctrl.list_tags_for_resource(resourceArn=a)
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"  warning: could not read gateway {gid} ({type(e).__name__})")
+                tagged = False
             why = _why(name, ids, tagged=tagged)
             if not why:
                 continue
@@ -278,11 +284,9 @@ def _discover_policy_engines() -> list[dict]:
         for pe in _paginate(br_ctrl.list_policy_engines, "policyEngines"):
             eid, name = pe["policyEngineId"], pe.get("name", "")
             ids = {eid} & {cfg_id} if cfg_id else set()
-            tagged = False
-            if not ids and not _name_matches(name):
-                tagged = _has_project_tag(
-                    lambda a=pe["policyEngineArn"]: br_ctrl.list_tags_for_resource(resourceArn=a)
-                )
+            tagged = _has_project_tag(
+                lambda a=pe["policyEngineArn"]: br_ctrl.list_tags_for_resource(resourceArn=a)
+            )
             why = _why(name, ids, tagged=tagged)
             if not why:
                 continue
@@ -316,14 +320,10 @@ def _discover_guardrails() -> list[dict]:
         for g in _paginate(br.list_guardrails, "guardrails"):
             gid, name = g["id"], g.get("name", "")
             ids = {gid} & {cfg_id} if cfg_id else set()
-            tagged = False
-            if not ids and not _name_matches(name):
-                # ListGuardrails summaries DO carry `arn` -- no extra Get needed.
-                # NOTE the capital "ARN": `bedrock` is the one service here that
-                # spells this parameter resourceARN.  See _has_project_tag.
-                tagged = _has_project_tag(
-                    lambda a=g["arn"]: br.list_tags_for_resource(resourceARN=a)
-                )
+            # ListGuardrails summaries DO carry `arn` -- no extra Get needed.
+            # NOTE the capital "ARN": `bedrock` is the one service here that
+            # spells this parameter resourceARN.  See _has_project_tag.
+            tagged = _has_project_tag(lambda a=g["arn"]: br.list_tags_for_resource(resourceARN=a))
             why = _why(name, ids, tagged=tagged)
             if why:
                 found[gid] = {"id": gid, "name": name, "why": why}
@@ -346,19 +346,16 @@ def _discover_knowledge_bases() -> list[dict]:
         for kb in _paginate(agent.list_knowledge_bases, "knowledgeBaseSummaries"):
             kid, name = kb["knowledgeBaseId"], kb.get("name", "")
             ids = {kid} & {cfg_id} if cfg_id else set()
-            tagged = False
-            if not ids and not _name_matches(name):
-                # KB summaries carry no ARN (verified 2026-09-22), so tag
-                # checking a differently-named KB costs one Get.
-                try:
-                    arn = agent.get_knowledge_base(knowledgeBaseId=kid)["knowledgeBase"][
-                        "knowledgeBaseArn"
-                    ]
-                    tagged = _has_project_tag(
-                        lambda a=arn: agent.list_tags_for_resource(resourceArn=a)
-                    )
-                except Exception:  # noqa: BLE001
-                    tagged = False
+            # KB summaries carry no ARN (verified 2026-09-22), so a tag check
+            # costs one Get.
+            try:
+                arn = agent.get_knowledge_base(knowledgeBaseId=kid)["knowledgeBase"][
+                    "knowledgeBaseArn"
+                ]
+                tagged = _has_project_tag(lambda a=arn: agent.list_tags_for_resource(resourceArn=a))
+            except Exception as e:  # noqa: BLE001
+                print(f"  warning: could not read knowledge base {kid} ({type(e).__name__})")
+                tagged = False
             why = _why(name, ids, tagged=tagged)
             if not why:
                 continue
@@ -402,11 +399,9 @@ def _discover_vector_buckets() -> list[dict]:
         for vb in _paginate(s3v.list_vector_buckets, "vectorBuckets"):
             name = vb["vectorBucketName"]
             ids = {name} & {cfg_bucket} if cfg_bucket else set()
-            tagged = False
-            if not ids and not _name_matches(name):
-                tagged = _has_project_tag(
-                    lambda a=vb["vectorBucketArn"]: s3v.list_tags_for_resource(resourceArn=a)
-                )
+            tagged = _has_project_tag(
+                lambda a=vb["vectorBucketArn"]: s3v.list_tags_for_resource(resourceArn=a)
+            )
             why = _why(name, ids, tagged=tagged)
             if not why:
                 continue

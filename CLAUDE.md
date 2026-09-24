@@ -436,11 +436,16 @@ How it works now:
   silently break that; `tests/test_bootstrap.py` pins it (duplicating the
   normaliser rather than importing `teardown`, which builds clients at import).
 
-**Still unverified:** no tag has yet been applied to a live resource, and no
-real deletion has run through this code path. The cheapest closing check is
-`python build_kb.py` on an already-provisioned account (idempotent; the adopt
-branches stamp the tags) then `make teardown-dry-run` — every line should read
-`[config, tag, name]`.
+**Tagging verified live 2026-09-24** (fresh `make start` on a clean account):
+`make teardown-dry-run` shows `[config, tag, name]` on the gateway, policy
+engine, guardrail, KB, vector bucket and corpus bucket. The two IAM roles show
+`[config, name]` by design (see `_discover_iam_roles`). Getting there needed a fix:
+every `_discover_*` skipped the tag lookup whenever config or name had already
+matched, so the tag could never appear and a tagging failure was undetectable.
+The lookup is now unconditional — keep it that way (see `_why`).
+
+**Still unverified:** no real deletion has run through this code path yet. The
+next `make teardown` is that check; it exits non-zero if anything survives.
 
 ## Model labels follow the model, not the slot
 

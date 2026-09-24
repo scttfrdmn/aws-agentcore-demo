@@ -354,7 +354,7 @@ def create_kb(role_arn: str, index_arn: str) -> tuple[str, str]:
     retrieval dilutes relevance.
 
     Returns:
-        (kb_id, data_source_id) -- paste both into config.py.
+        (kb_id, data_source_id) -- main() writes both into config.py.
 
     Raises:
         ValidationException: most likely a storageConfiguration shape mismatch.
@@ -536,7 +536,7 @@ def create_guardrail() -> tuple[str, str]:
     external URLs reach the audience's browser.
 
     Returns:
-        (guardrail_id, version) -- paste both into config.py.
+        (guardrail_id, version) -- main() writes both into config.py.
     """
     br = boto3.client("bedrock", region_name=cfg.REGION)
 
@@ -941,7 +941,7 @@ def create_gateway() -> dict:
         a full replacement, not a patch.
 
     Returns:
-        dict with gateway_id, gateway_url, engine_id -- paste into config.py.
+        dict with gateway_id, gateway_url, engine_id -- main() writes them into config.py.
     """
     br_ctrl = boto3.client("bedrock-agentcore-control", region_name=cfg.REGION)
 
@@ -1314,7 +1314,9 @@ def estimate_ingestion_cost() -> None:
     approx_tokens = total_chars / 4  # 4 characters per token is a common approximation
     usd = (approx_tokens / 1_000_000) * cfg.EMBED_USD_PER_1M_TOKENS
     print(f"\n  Ingestion cost estimate ({total_chars:,} chars ≈ {approx_tokens:,.0f} tokens):")
-    print(f"    INGESTION_COST_ESTIMATE = {usd:.4f}  # USD, paste into config.py")
+    # Printed for the operator only.  Nothing reads it back: the app derives the
+    # same figure itself (AwsBackend.kb_setup_costs), so there is nothing to copy.
+    print(f"    about ${usd:.4f}, one-time -- recorded automatically, nothing to copy")
 
 
 def main() -> None:

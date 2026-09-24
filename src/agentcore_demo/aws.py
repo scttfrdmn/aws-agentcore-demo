@@ -137,9 +137,10 @@ _BYTES_PER_VECTOR = 4096 + 2048 + 512
 def _gw_mcp_url(base: str) -> str:
     """Return the gateway's MCP endpoint, whether or not `base` already ends in /mcp.
 
-    Defensive because the value is copy-pasted by a human from build_kb.py's
-    output into config.py, and the two sides disagreed about the suffix once
-    already.  Idempotent: appending /mcp twice is the failure this prevents.
+    Defensive because GATEWAY_URL may come from build_kb.py's write-back or
+    from a hand-edited config.py (a real value a human typed always wins), and
+    the two sides disagreed about the suffix once already.  Idempotent:
+    appending /mcp twice is the failure this prevents.
     """
     trimmed = base.rstrip("/")
     return trimmed if trimmed.endswith("/mcp") else trimmed + "/mcp"
