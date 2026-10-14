@@ -65,32 +65,32 @@ That split into 668 train, 40 valid and 40 test.
 validation set has only 40 examples, so the curve is noisy. The step-400
 checkpoint was kept.
 
-**Results.** `compare` ran on 20 held-out questions plus locked Q1 and Q2.
-Held-out questions had 6 passages; the locked ones had 12, as the demo sends.
+**Results.** `compare` was re-run 2026-10-14 with the truncation check added.
+It used 20 held-out questions (6 passages each) plus locked Q2 (12 passages, as
+the demo sends). Locked Q1 is left out by default: the local BM25 stand-in
+retrieves Lp(a) passages for it, so every model, teacher included, answers a
+narrower question than was asked. That measures our retriever, not the student.
 
-| model | compliant | mean words | mean s (this Mac) |
-|---|---|---|---|
-| base student | 17/22 | 102 | 11.6 |
-| **distilled student** | **22/22** | **69** | 12.8 |
-| teacher (qwen3.6:35b) | 22/22 | 86 | 7.6 |
+| model | compliant | what went wrong | mean words | sources cited / answer |
+|---|---|---|---|---|
+| base student | 15/21 | cut off ×4, no citation ×3, cited a paper it wasn't given ×1 | 98 | 1.2 |
+| **distilled student** | **21/21** | — | 70 | 1.0 |
+| teacher (qwen3.6:35b) | 21/21 | — | 86 | 1.5 |
 
 What these results do and do not show:
 
-- **The distilled student learned the job.** It now follows beat 1's rules every
-  time, as the teacher does. The base student broke them on 5 of 22: no
-  citation, or over the length limit.
-- **Its answers are shorter and cite fewer sources than the teacher's.** The
-  teacher's best answers draw on several papers, while the student's tend to
-  lean on one.
-- **On locked Q1, both the student and the teacher answered only about Lp(a).**
-  The local BM25 stand-in for the KB retrieved Lp(a) passages for that
-  question. This is a retrieval artefact, not a model one, but Q1 is not a fair
-  showcase from this run.
-- **Smaller is not faster here.** The MoE teacher activates about 3B parameters
-  per token and beats the dense 7B student on wall-clock.
-- **Answers can be cut off mid-sentence.** One spot check ran into the 320-token
-  `max_tokens` cap and was truncated, yet stayed under the 170-word check.
-  `problems_for` does not detect truncation; that is a known gap.
+- **The distilled student learned the job.** It follows beat 1's rules every
+  time, as the teacher does, and it finished every answer.
+- **It is terser and cites fewer sources than the teacher**: 1.0 distinct
+  papers per answer against 1.5. That is the honest weakness. A next run
+  should look for it in training (more multi-source teacher answers) rather
+  than hide it.
+- **Smaller is not faster here.** The MoE teacher activates about 3B
+  parameters per token and beats the dense 7B student on wall-clock time
+  (8.7 s against 12.6 s per answer on this Mac).
+- **3 of the 748 teacher training answers were cut off mid-sentence**, found
+  afterwards by the new check. At 0.4% it was not worth re-training, but the
+  check now filters them out of future runs.
 
 **Output.** `fused/itl-pcsk9-mistral-7b/` holds the merged model:
 `MistralForCausalLM`, bf16, 14.5 GB, Hugging Face safetensors plus the tokenizer.

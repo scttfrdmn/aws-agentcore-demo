@@ -256,7 +256,12 @@ def problems_for(answer: str, allowed: set[str]) -> list[str]:
 
     Deliberately mechanical -- no LLM judge.  Every number `compare` reports is
     one a researcher can re-check by eye: did it cite, did every citation point
-    at a passage it was actually given, no URLs, within the length limit.
+    at a passage it was actually given, no URLs, within the length limit, and
+    it actually finished.
+
+    The "finished" check was added after a spot check found an answer cut off
+    mid-sentence at max_tokens that still passed the word limit.  An answer
+    ends cleanly on sentence punctuation or a closing citation bracket.
     """
     cited = set(PMC_RE.findall(answer))
     problems = []
@@ -268,6 +273,8 @@ def problems_for(answer: str, allowed: set[str]) -> list[str]:
         problems.append("contains a URL")
     if len(answer.split()) > 170:
         problems.append(f"{len(answer.split())} words (limit 150)")
+    if answer.rstrip().rstrip("\"'\u201d\u2019")[-1:] not in {".", "!", "?", "]", ")"}:
+        problems.append("cut off mid-sentence")
     return problems
 
 
@@ -320,7 +327,12 @@ def _compare_cases(args) -> list[dict]:
         user = folded[len(Q.PLAIN_SYSTEM) + 2 :]
         cases.append({"label": "held-out", "question": user.rsplit("\n\n", 1)[-1], "user": user})
     top_k = _retriever(read_jsonl(DATA / "chunks.jsonl"))
-    for i in (0, 1):
+    # Locked Q1 is off by default: the local BM25 stand-in retrieves Lp(a)
+    # passages for it, so every model -- teacher included -- answers a narrower
+    # question than was asked (seen 2026-10-14).  That measures our retriever,
+    # not the student.  `--locked 1 2` puts it back.
+    for n in args.locked:
+        i = n - 1
         q = Q.QUESTIONS[i]
         cases.append(
             {"label": f"locked Q{i + 1}", "question": q, "user": user_prompt(q, top_k(q, 12))}
@@ -416,7 +428,8 @@ def main() -> None:
     s.add_argument("--seed", type=int, default=13)
     s = sub.add_parser("compare")
     s.add_argument("--adapter", default=str(HERE / "adapters"))
-    s.add_argument("--n", type=int, default=40, help="held-out cases (plus locked Q1, Q2)")
+    s.add_argument("--n", type=int, default=40, help="held-out cases (plus the locked ones)")
+    s.add_argument("--locked", type=int, nargs="*", default=[2], help="locked questions to add")
     args = p.parse_args()
     stages = {
         "chunks": cmd_chunks,
