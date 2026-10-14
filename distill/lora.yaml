@@ -1,0 +1,31 @@
+# LoRA settings for the student, as measured on an M4 Max / 64 GB (2026-10-13).
+#   uv run python -m mlx_lm lora -c lora.yaml
+#
+# Why these values:
+#   learning_rate 2e-5  -- 1e-4 diverged (val loss 0.88 -> 9.0 in 16 steps);
+#                          2e-5 fell 0.88 -> 0.49 over the same 16.
+#   grad_checkpoint     -- without it, 5k-token sequences ran the GPU out of
+#                          memory (Metal kIOGPUCommandBufferCallbackErrorOutOfMemory).
+#                          Unload the Ollama teacher before training, too.
+#   max_seq_length 8192 -- examples are built with 6 passages (~5k Mistral
+#                          tokens).  12 passages ran past 10k and truncation cut
+#                          off the answer -- with mask_prompt that left nothing
+#                          to learn from and the loss went NaN.
+#   mask_prompt         -- learn the answer, not to reproduce the passages.
+model: models/student-mistral-7b-v0.3-4bit
+train: true
+data: data
+fine_tune_type: lora
+mask_prompt: true
+batch_size: 1
+num_layers: 16
+iters: 500
+learning_rate: 2.0e-5
+max_seq_length: 8192
+grad_checkpoint: true
+steps_per_report: 25
+steps_per_eval: 100
+val_batches: 20
+save_every: 100
+adapter_path: adapters
+seed: 13

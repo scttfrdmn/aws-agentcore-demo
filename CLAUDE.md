@@ -42,6 +42,7 @@ and adjusted, not scaffolding to be filled in. `ruff` is clean and 143 tests pas
 | `src/agentcore_demo/run.py` | headless runner — all questions, no browser |
 | `src/agentcore_demo/static/index.html` | the live page (Alpine.js, no build step) |
 | `tests/` | `test_cost.py`, `test_agent.py`, `test_app.py`, `test_bootstrap.py`, `test_corpus_licence.py`, `test_sdk_contract.py`, `conftest.py` |
+| `distill/` | **offline, optional, own uv project (MLX, Apple silicon only)** — open-weight teacher → small open-weight student for beat 1's job. Not part of `make start`, not in CI's deps. Read `distill/README.md` first |
 
 There is no `INITIAL_PROMPT.md` — that planning doc was removed in `91fb746`.
 
