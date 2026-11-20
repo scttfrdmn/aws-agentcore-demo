@@ -296,8 +296,8 @@ def create_vector_store() -> str:
         s3v.create_vector_bucket(vectorBucketName=cfg.VECTOR_BUCKET_NAME, tags=PROJECT_TAGS)
         print(f"  vector bucket: {cfg.VECTOR_BUCKET_NAME}")
     except Exception as e:  # noqa: BLE001 -- already-exists is fine
-        # ResourceConflictException = bucket already exists from a previous run.
-        print(f"  vector bucket: {type(e).__name__} (continuing)")
+        # ConflictException = bucket already exists from a previous run.
+        print(_exists_or_error("vector bucket", cfg.VECTOR_BUCKET_NAME, e))
         _adopt(
             f"vector bucket {cfg.VECTOR_BUCKET_NAME}",
             lambda: s3v.tag_resource(resourceArn=bucket_arn, tags=PROJECT_TAGS),
@@ -327,7 +327,7 @@ def create_vector_store() -> str:
         )
         print(f"  vector index: {cfg.VECTOR_INDEX_NAME}")
     except Exception as e:  # noqa: BLE001
-        print(f"  vector index: {type(e).__name__} (continuing)")
+        print(_exists_or_error("vector index", cfg.VECTOR_INDEX_NAME, e))
         _adopt(
             f"vector index {cfg.VECTOR_INDEX_NAME}",
             lambda: s3v.tag_resource(resourceArn=index_arn, tags=PROJECT_TAGS),
@@ -335,6 +335,20 @@ def create_vector_store() -> str:
 
     # The index ARN is what create_knowledge_base needs in storageConfiguration.
     return index_arn
+
+
+def _exists_or_error(what: str, name: str, e: Exception) -> str:
+    """The line to print when an S3 Vectors create call raised.
+
+    "Already exists" is the normal re-run case and should read like every other
+    step's "exists" line.  It used to print "ConflictException (continuing)" --
+    and printed ANY other error the same way, so a real failure looked identical
+    to a harmless re-run.  Behaviour is unchanged (the build continues either
+    way, as before); only the reporting now tells the two apart.
+    """
+    if "Conflict" in type(e).__name__:
+        return f"  {what} exists: {name}"
+    return f"  {what}: {type(e).__name__}: {e} (continuing)"
 
 
 # ----------------------------------------------------------------------
@@ -1367,15 +1381,23 @@ def main() -> None:
     running = [j for j in jobs if j.get("status") in ("STARTING", "IN_PROGRESS")]
     if running and not completed:
         ingest(kb_id, ds_id, job_id=running[0]["ingestionJobId"])
+        estimate_ingestion_cost()
     elif completed:
-        s = completed[0].get("statistics", {})
+        # Report the LATEST job, not whichever the API lists first: it used to
+        # print the oldest one's count (found 2026-11-20, after a later job had
+        # swapped 268 papers).  numberOfDocumentsScanned is what the KB holds.
+        latest = max(completed, key=lambda j: j.get("updatedAt") or j.get("startedAt"))
+        when = latest.get("updatedAt") or latest.get("startedAt")
+        scanned = latest.get("statistics", {}).get("numberOfDocumentsScanned")
         print(
-            f"  ingestion already complete: "
-            f"{s.get('numberOfNewDocumentsIndexed')} documents indexed -- skipping"
+            f"  ingestion already complete: {scanned} documents in the knowledge base "
+            f"(last ingested {when:%Y-%m-%d}) -- skipping, nothing charged"
         )
+        # No estimate_ingestion_cost() here: printing a dollar figure on a run
+        # that indexed nothing read like a fresh charge on every re-run.
     else:
         ingest(kb_id, ds_id)
-    estimate_ingestion_cost()
+        estimate_ingestion_cost()
 
     print("6/7  guardrail")
     guardrail_id, guardrail_version = create_guardrail()

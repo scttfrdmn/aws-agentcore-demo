@@ -10,7 +10,11 @@ requires-python = ">=3.11"
 dependencies = [
     # boto3 is a floor only: it is additive/backward-compatible across minors and
     # new AWS services (s3vectors, bedrock-agentcore-control) arrive by upgrading.
-    "boto3>=1.40.0",
+    # [crt] is not optional in practice: a profile set up with `aws login`
+    # (login_session in ~/.aws/config) cannot sign requests without awscrt, and
+    # start.py then failed before doing anything (found 2026-11-20 on a second
+    # computer).  Static-key and SSO profiles do not need it; it costs nothing.
+    "boto3[crt]>=1.40.0",
     # Upper bound is deliberate: we call the CodeInterpreter client directly
     # (aws.py code_interpreter_run -> start/invoke/stop), which is not a stable
     # public API.  A 2.x could rename it and only fail live, on stage.
