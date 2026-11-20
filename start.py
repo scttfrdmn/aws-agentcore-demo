@@ -92,9 +92,45 @@ def step_preflight() -> None:
     sys.exit(1)
 
 
+def _use_shared_corpus() -> bool:
+    """True if this account's bucket already holds the corpus and we mirrored it.
+
+    Checked BEFORE the local corpus, deliberately: a computer whose own
+    ./corpus/ is "complete" but different (fetched from PMC on another day)
+    must still switch to the shared one.  See bootstrap section 4b.
+
+    Any failure to read the bucket falls back to the old local behaviour rather
+    than stopping the run -- build_kb.py checks the bucket again before it
+    uploads anything, and that check does stop on a real permission problem.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError  # noqa: PLC0415
+
+    import config as cfg  # noqa: PLC0415 -- must follow step_config()
+    import corpus_fetch  # noqa: PLC0415 -- imports `requests`; keep it lazy
+
+    session, problem = bootstrap.safe_session()
+    if session is None:
+        print(f"  (could not check the shared corpus: {problem})")
+        return False
+    s3 = session.client("s3", region_name=cfg.REGION)
+    try:
+        return bootstrap.use_bucket_corpus_if_complete(
+            cfg.BUCKET, cfg.CORPUS_PREFIX, corpus_fetch.TARGET, s3
+        )
+    except (BotoCoreError, ClientError) as e:
+        print(f"  (could not read s3://{cfg.BUCKET}: {type(e).__name__}) -- using ./corpus/")
+        return False
+
+
 def step_corpus() -> None:
-    """Step 3: the paper corpus.  Free, slow, resumable, skipped when complete."""
+    """Step 3: the paper corpus.  Free, slow, resumable, skipped when complete.
+
+    If another computer has already seeded this account's bucket, its corpus is
+    downloaded instead (about a minute) and PubMed Central is not touched.
+    """
     _rule("3/5  paper corpus (free; 10-15 minutes the first time)")
+    if _use_shared_corpus():
+        return
     have, complete = _corpus_status()
     if complete:
         print(f"  corpus already complete: {have} papers in ./corpus/ -- skipping")

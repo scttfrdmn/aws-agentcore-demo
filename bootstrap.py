@@ -471,6 +471,145 @@ def upload_corpus(
 
 
 # ----------------------------------------------------------------------
+# 4b. Several computers, one account  --  the bucket is the master copy
+# ----------------------------------------------------------------------
+# WHY (2026-11-20).  Every computer used to build its OWN corpus from a live
+# PubMed Central search, and that search drifts as papers are published and
+# withdrawn.  A second machine set up weeks later fetched a different 1,000:
+# found in one account with 268 of 1,000 papers swapped between machines.  On
+# this code path the extras would then have been uploaded and never ingested
+# (build_kb.py skips ingestion once a job has completed), so S3 and the
+# knowledge base would silently disagree -- citations linking to papers the KB
+# never indexed.
+#
+# The rule now: whichever computer seeds the bucket FIRST decides the corpus.
+# Once the bucket holds a complete corpus, every computer downloads it instead
+# of fetching from PMC, and nothing local is ever uploaded over it.  Papers on
+# disk that are not in the bucket are MOVED aside, never deleted -- they may be
+# someone's only copy -- and never uploaded, so they cannot grow the KB.
+#
+# "Complete" means at least `target` papers (corpus_fetch.TARGET).  A bucket
+# that is partially seeded (the first computer was interrupted mid-upload) is
+# still completed from the local corpus, exactly as before.
+CORPUS_SET_ASIDE_DIR = REPO_ROOT / "corpus-set-aside"
+
+
+def list_remote_corpus(bucket: str, prefix: str, s3) -> dict[str, int]:
+    """Return {file name: size} for the corpus .txt files under s3://bucket/prefix.
+
+    A bucket that does not exist yet is simply an empty corpus -- that is the
+    first-computer case, not an error.  Anything else (AccessDenied, throttling)
+    is raised: guessing "empty" there would make us fetch and upload a second,
+    different corpus into a bucket we merely could not read.
+    """
+    prefix = prefix if prefix.endswith("/") else prefix + "/"
+    remote: dict[str, int] = {}
+    try:
+        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                name = obj["Key"][len(prefix) :]
+                if name.endswith(".txt") and "/" not in name:
+                    remote[name] = obj["Size"]
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchBucket", "404"):
+            return {}
+        raise
+    return remote
+
+
+def mirror_corpus_from_bucket(
+    bucket: str,
+    prefix: str,
+    remote: dict[str, int],
+    s3,
+    local_dir: str | os.PathLike = CORPUS_DIR,
+    set_aside_dir: str | os.PathLike = CORPUS_SET_ASIDE_DIR,
+    *,
+    workers: int = 16,
+    echo=print,
+) -> tuple[int, int]:
+    """Make local_dir hold exactly the corpus in the bucket.  Returns (downloaded, set aside).
+
+    Downloads every remote file that is missing locally or differs in size, and
+    moves every local .txt that is NOT in the bucket into `set_aside_dir`.
+    Idempotent: a second run downloads nothing and moves nothing.
+    """
+    local_dir, set_aside_dir = Path(local_dir), Path(set_aside_dir)
+    local_dir.mkdir(parents=True, exist_ok=True)
+    prefix = prefix if prefix.endswith("/") else prefix + "/"
+    local = {p.name: p for p in local_dir.iterdir() if p.is_file() and p.suffix == ".txt"}
+
+    extras = sorted(set(local) - set(remote))
+    if extras:
+        set_aside_dir.mkdir(parents=True, exist_ok=True)
+        for name in extras:
+            local[name].replace(set_aside_dir / name)
+        echo(
+            f"  set aside {len(extras)} local paper(s) that are not in the shared "
+            f"corpus -> {set_aside_dir.name}/  (moved, not deleted)"
+        )
+
+    todo = [n for n in sorted(remote) if n not in local or local[n].stat().st_size != remote[n]]
+    if not todo:
+        echo(f"  local corpus matches s3://{bucket}/{prefix}: {len(remote)} papers")
+        return 0, len(extras)
+
+    echo(f"  downloading {len(todo)} paper(s) from s3://{bucket}/{prefix}")
+
+    def get(name: str) -> None:
+        # download_file writes to a temporary name and renames on success, so
+        # an interrupted run never leaves a truncated paper that looks complete.
+        s3.download_file(bucket, f"{prefix}{name}", str(local_dir / name))
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(get, todo))  # list() re-raises the first failure
+    echo(f"  local corpus now matches the bucket: {len(remote)} papers")
+    return len(todo), len(extras)
+
+
+def use_bucket_corpus_if_complete(
+    bucket: str, prefix: str, target: int, s3, *, echo=print, **mirror_kwargs
+) -> bool:
+    """If the bucket already holds a complete corpus, mirror it down and return True.
+
+    False means "this computer seeds or completes the bucket": the caller then
+    fetches from PMC and/or uploads as it always did.
+    """
+    remote = list_remote_corpus(bucket, prefix, s3)
+    if len(remote) < target:
+        return False
+    echo(
+        f"  s3://{bucket}/{prefix} already holds the shared corpus ({len(remote)} papers) "
+        f"-- using it, so every computer on this account sees the same papers"
+    )
+    mirror_corpus_from_bucket(bucket, prefix, remote, s3, echo=echo, **mirror_kwargs)
+    return True
+
+
+def sync_corpus(
+    bucket: str,
+    prefix: str,
+    target: int,
+    s3,
+    *,
+    region: str = DEFAULT_REGION,
+    local_dir: str | os.PathLike = CORPUS_DIR,
+    set_aside_dir: str | os.PathLike = CORPUS_SET_ASIDE_DIR,
+    echo=print,
+) -> str:
+    """The one call build_kb.py makes: use the bucket's corpus, or upload ours.
+
+    Returns "mirrored" (the bucket was complete; nothing uploaded) or "uploaded".
+    """
+    if use_bucket_corpus_if_complete(
+        bucket, prefix, target, s3, echo=echo, local_dir=local_dir, set_aside_dir=set_aside_dir
+    ):
+        return "mirrored"
+    upload_corpus(bucket, prefix, local_dir, s3=s3, region=region, echo=echo)
+    return "uploaded"
+
+
+# ----------------------------------------------------------------------
 # 5. config.py  --  was: "paste these seven values into config.py"
 # ----------------------------------------------------------------------
 # This is the highest-risk thing in the repo: it edits a file a human may have

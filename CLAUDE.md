@@ -21,7 +21,7 @@ reliability of a live run, and honest cost numbers.
 
 **The demo is built and works.** It was written 2026-05-20 → 06-12 and has been run
 live against the real account. Treat everything below as working code to be reviewed
-and adjusted, not scaffolding to be filled in. `ruff` is clean and 143 tests pass.
+and adjusted, not scaffolding to be filled in. `ruff` is clean and 153 tests pass.
 
 | file | role |
 |---|---|
@@ -41,7 +41,7 @@ and adjusted, not scaffolding to be filled in. `ruff` is clean and 143 tests pas
 | `src/agentcore_demo/app.py` | FastAPI: `/ws` WebSocket, serves the page, opens the browser |
 | `src/agentcore_demo/run.py` | headless runner — all questions, no browser |
 | `src/agentcore_demo/static/index.html` | the live page (Alpine.js, no build step) |
-| `tests/` | `test_cost.py`, `test_agent.py`, `test_app.py`, `test_bootstrap.py`, `test_corpus_licence.py`, `test_sdk_contract.py`, `conftest.py` |
+| `tests/` | `test_cost.py`, `test_agent.py`, `test_app.py`, `test_bootstrap.py`, `test_corpus_licence.py`, `test_corpus_sync.py`, `test_sdk_contract.py`, `conftest.py` |
 
 There is no `INITIAL_PROMPT.md` — that planning doc was removed in `91fb746`.
 
@@ -120,6 +120,38 @@ A name present but *not* a simple literal is skipped **and reported**, and
 deliberately **not** appended at the end — an appended assignment would silently
 shadow the human's expression. Names absent entirely are appended once, in one
 marked block. `tests/test_bootstrap.py` pins all of this.
+
+### Several computers, one account: the bucket is the master copy
+
+The owner runs the demo from more than one computer against the same AWS
+account. Each computer used to build its **own** corpus from a live PubMed
+Central search. That search drifts, so on 2026-11-20 two machines were found
+268 of 1,000 papers apart. The rule is now `bootstrap` section 4b:
+
+- **The first computer to seed the bucket decides the corpus.** Once
+  `s3://<bucket>/corpus/` holds at least `corpus_fetch.TARGET` papers, every
+  computer **downloads** it (`mirror_corpus_from_bucket`) rather than fetching
+  from PMC. A second computer's setup is then about a minute, not 10–15.
+- **Nothing local is ever uploaded over a complete bucket.** Local papers the
+  bucket lacks are **moved** to `corpus-set-aside/`, never deleted and never
+  uploaded. This matters because `build_kb.py` skips ingestion once any job has
+  completed: an uploaded extra would sit in S3 un-indexed, and S3 and the KB
+  would silently disagree.
+- **Two places check, on purpose.** `start.py` checks *before* the local corpus,
+  because a "complete" but different local corpus must still switch over.
+  `build_kb.py` (`sync_corpus`) checks again before any upload, which covers
+  `make build-kb` run directly.
+- **A missing bucket is the first-computer case; an unreadable one raises.**
+  Reading AccessDenied as "empty" would seed a second, different corpus.
+- **Concurrent first builds:** if another computer's ingestion job is running,
+  `build_kb.py` waits on it rather than starting a second job (Bedrock allows
+  one per data source, so a second fails with ConflictException).
+- **Teardown is account-wide** and says so before deleting. It removes
+  `corpus-set-aside/` along with `corpus/`.
+
+`tests/test_corpus_sync.py` pins all of this. A partially-seeded bucket (the first
+computer interrupted mid-upload) is still completed from the local corpus, as
+before.
 
 ### The upload lives in build_kb.py, not corpus_fetch.py
 
@@ -328,7 +360,7 @@ never actually been exercised are now exercised. Findings worth keeping:
   `sys.path` so tests can import them. In `build_kb.py` the
   `bootstrap.ensure_config()` call **must precede** `import config as cfg` (it is
   what creates the file) — hence the `# noqa: E402`; do not reorder it.
-- **`make lint` / `make test` work from a cold checkout** (143 tests) — no
+- **`make lint` / `make test` work from a cold checkout** (153 tests) — no
   `make install` needed. They pass `--extra dev` explicitly. This used to fail
   with `ModuleNotFoundError: No module named 'agentcore_demo'` because bare
   `uv run pytest` installs neither the package nor the dev extra; fixed

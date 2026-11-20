@@ -3,6 +3,9 @@ config.py
 # the same real account ID / resource IDs, so it must never be committed either.
 config.py.bak
 corpus/
+# Papers moved out of corpus/ because the shared bucket did not have them
+# (bootstrap section 4b).  Same lifetime as corpus/; teardown deletes both.
+corpus-set-aside/
 chart.png
 .env
 __pycache__/

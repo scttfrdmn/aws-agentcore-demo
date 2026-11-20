@@ -62,6 +62,11 @@ What gets deleted, and what it costs to leave behind:
   - S3 corpus bucket         -- ~$0.023/GB-month standard storage
   - IAM roles (gateway, KB)  -- no cost, but they are the mess people notice
   - local corpus/ directory  -- the downloaded papers on your laptop
+  - local corpus-set-aside/  -- papers moved aside because the shared bucket
+                                did not have them (see bootstrap section 4b)
+
+These resources are shared by EVERY computer that ran `make start` against
+this account: tearing down from one removes the demo for all of them.
 
 Ordering that is load-bearing (do not reshuffle):
   1. gateway targets drained -> policy engine detached -> gateway deleted
@@ -851,18 +856,21 @@ def delete_all(found: dict) -> None:
         delete_iam_role(r["name"])
 
     print("\n--- S3 corpus buckets ---")
-    # WARNING: this deletes all the papers you downloaded with corpus_fetch.py.
-    # Re-run corpus_fetch.py + aws s3 sync to rebuild if needed.
+    # WARNING: this deletes the shared corpus every computer on this account
+    # mirrors.  `make start` rebuilds it (fetch from PMC, upload) if needed.
     for b in found["s3_buckets"]:
         _try(f"S3 corpus bucket {b['name']}", lambda name=b["name"]: _delete_bucket(name))
 
     print("\n--- local files ---")
-    corpus_dir = "corpus"
-    if os.path.isdir(corpus_dir):
-        shutil.rmtree(corpus_dir)
-        print(f"  deleted: local {corpus_dir}/ directory")
-    else:
-        print(f"  skip (local {corpus_dir}/): not present")
+    # corpus-set-aside/ holds papers bootstrap.mirror_corpus_from_bucket() moved
+    # out of corpus/ because they were not in the shared bucket.  Same lifetime
+    # as corpus/ itself, so it goes too.
+    for corpus_dir in ("corpus", "corpus-set-aside"):
+        if os.path.isdir(corpus_dir):
+            shutil.rmtree(corpus_dir)
+            print(f"  deleted: local {corpus_dir}/ directory")
+        else:
+            print(f"  skip (local {corpus_dir}/): not present")
 
 
 def verify(attempts: int = 6, pause: int = 10) -> bool:
@@ -920,6 +928,11 @@ def main() -> int:
         # not assert.  The post-deletion verify() is what gates the exit code.
         return 0
 
+    # One line, not a prompt: teardown is scripted and must not stop to ask.
+    print(
+        "\nNote: these are shared by every computer that ran `make start` against "
+        f"account {cfg.ACCOUNT_ID} -- this removes the demo for all of them."
+    )
     delete_all(found)
     return 0 if verify() else 1
 

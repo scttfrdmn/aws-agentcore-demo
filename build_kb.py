@@ -450,7 +450,7 @@ def create_kb(role_arn: str, index_arn: str) -> tuple[str, str]:
 # ----------------------------------------------------------------------
 # 4. Ingestion
 # ----------------------------------------------------------------------
-def ingest(kb_id: str, ds_id: str) -> None:
+def ingest(kb_id: str, ds_id: str, job_id: str | None = None) -> None:
     """Start an ingestion job and poll until it completes or fails.
 
     The ingestion job reads every .txt file under corpus/ in S3, splits each
@@ -468,11 +468,18 @@ def ingest(kb_id: str, ds_id: str) -> None:
     Args:
         kb_id: the Knowledge Base ID returned by create_kb().
         ds_id: the data source ID returned by create_kb().
+        job_id: an ingestion job already running (started by another computer
+            on the same account) to wait on instead of starting a new one --
+            Bedrock allows one ingestion job per data source at a time, so a
+            second start_ingestion_job would fail with a ConflictException.
     """
-    job_id = agent.start_ingestion_job(knowledgeBaseId=kb_id, dataSourceId=ds_id)["ingestionJob"][
-        "ingestionJobId"
-    ]
-    print("  ingestion started -- embedding + indexing every paper...")
+    if job_id is None:
+        job_id = agent.start_ingestion_job(knowledgeBaseId=kb_id, dataSourceId=ds_id)[
+            "ingestionJob"
+        ]["ingestionJobId"]
+        print("  ingestion started -- embedding + indexing every paper...")
+    else:
+        print("  another computer is already ingesting this corpus -- waiting for it")
 
     while True:
         st = agent.get_ingestion_job(
@@ -1239,14 +1246,20 @@ def ensure_corpus_bucket() -> None:
       2. TAG it, so teardown.py can still find it after a rename (below).
       3. UPLOAD corpus/ into it, in parallel, skipping what is already there.
          This is deliberately here and not in corpus_fetch.py -- see the long
-         comment above bootstrap.upload_corpus() for why.
+         comment above bootstrap.upload_corpus() for why.  If the bucket
+         already holds a complete corpus (another computer seeded it), nothing
+         is uploaded and the bucket's corpus is mirrored down instead.
 
     The upload must happen BEFORE the ingestion job in step 5, or the job
     "succeeds" against an empty prefix and leaves an empty knowledge base.
     """
     bootstrap.ensure_bucket(cfg.BUCKET, cfg.REGION, s3)
     tag_corpus_bucket()
-    bootstrap.upload_corpus(cfg.BUCKET, cfg.CORPUS_PREFIX, s3=s3, region=cfg.REGION)
+    # If another computer already seeded this account's bucket, its corpus wins:
+    # mirror it down and upload nothing.  See bootstrap section 4b.
+    import corpus_fetch  # noqa: PLC0415 -- imports `requests`; only TARGET is needed
+
+    bootstrap.sync_corpus(cfg.BUCKET, cfg.CORPUS_PREFIX, corpus_fetch.TARGET, s3, region=cfg.REGION)
 
 
 def tag_corpus_bucket() -> None:
@@ -1342,15 +1355,19 @@ def main() -> None:
     # Skip ingestion if a completed job with indexed documents already exists.
     # This avoids re-embedding the entire corpus on every re-run (costs ~$0.15).
     # If you add new papers to S3, re-run teardown.py then build_kb.py to reindex.
+    jobs = agent.list_ingestion_jobs(knowledgeBaseId=kb_id, dataSourceId=ds_id).get(
+        "ingestionJobSummaries", []
+    )
     completed = [
         j
-        for j in agent.list_ingestion_jobs(knowledgeBaseId=kb_id, dataSourceId=ds_id).get(
-            "ingestionJobSummaries", []
-        )
+        for j in jobs
         if j.get("status") == "COMPLETE"
         and j.get("statistics", {}).get("numberOfNewDocumentsIndexed", 0) > 0
     ]
-    if completed:
+    running = [j for j in jobs if j.get("status") in ("STARTING", "IN_PROGRESS")]
+    if running and not completed:
+        ingest(kb_id, ds_id, job_id=running[0]["ingestionJobId"])
+    elif completed:
         s = completed[0].get("statistics", {})
         print(
             f"  ingestion already complete: "
